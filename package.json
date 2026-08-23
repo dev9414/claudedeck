@@ -2,7 +2,7 @@
   "name": "claudedeck",
   "version": "0.1.0",
   "description": "Mission control for your Claude Code accounts — a cross-platform desktop GUI for multi-account switching, live quota tracking, and usage history.",
-  "author": "ClaudeDeck contributors",
+  "author": "ClaudeDeck contributors <vaghanidev412@gmail.com>",
   "license": "MIT",
   "main": "./out/main/index.js",
   "bin": {

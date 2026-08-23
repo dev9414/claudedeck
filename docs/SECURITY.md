@@ -303,10 +303,13 @@ Be clear-eyed about these:
 
 **Please do not open a public GitHub issue for a security problem.**
 
-Use GitHub's private vulnerability reporting:
-**[Security → Report a vulnerability](https://github.com/dev9414/claudedeck/security/advisories/new)**.
-It opens a private thread visible only to the maintainers, and it works even
-before there is a published advisory.
+Email **vaghanidev412@gmail.com** with `[ClaudeDeck security]` in the subject
+line.
+
+If you would rather not use email, GitHub's
+[private vulnerability reporting](https://github.com/dev9414/claudedeck/security/advisories/new)
+opens a thread visible only to the maintainers and works before any advisory is
+published. Either channel is fine.
 
 Useful to include:
 

@@ -59,9 +59,8 @@ representative at an online or offline event.
 ## Enforcement
 
 Instances of abusive, harassing, or otherwise unacceptable behavior may be
-reported privately to the maintainers by opening a
-[private security advisory](https://github.com/dev9414/claudedeck/security/advisories/new),
-which is the only private channel this project currently offers.
+reported to the community leaders responsible for enforcement at
+**vaghanidev412@gmail.com**.
 All complaints will be reviewed and investigated promptly and fairly.
 
 All community leaders are obligated to respect the privacy and security of the
