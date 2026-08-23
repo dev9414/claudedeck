@@ -1,0 +1,1059 @@
+/*
+ * Base layer: reset, typography, focus, scrollbars, the app layout grid, and
+ * the shared `cd-` primitives the views compose from.
+ *
+ * Every color here resolves through a token from tokens.css. A literal color
+ * in this file would sit outside the validated palette, so there are none —
+ * tints are built with color-mix() against a token, never a new hex.
+ */
+
+@import './tokens.css';
+@import './motion.css';
+
+/* --------------------------------------------------------------------------
+   Reset
+   -------------------------------------------------------------------------- */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--plane);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  /* The shell owns scrolling; only the view area may overflow. */
+  overflow: hidden;
+}
+
+h1,
+h2,
+h3,
+h4,
+p,
+figure,
+ul,
+ol {
+  margin: 0;
+}
+
+ul,
+ol {
+  padding: 0;
+  list-style: none;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+  color: inherit;
+}
+
+button {
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+}
+
+button:disabled {
+  cursor: not-allowed;
+}
+
+a {
+  color: var(--text-primary);
+  text-decoration-color: var(--border-strong);
+  text-underline-offset: 2px;
+}
+
+svg {
+  display: block;
+}
+
+/* --------------------------------------------------------------------------
+   Typography
+   -------------------------------------------------------------------------- */
+
+h1,
+.cd-h1 {
+  font-size: 20px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  line-height: 1.25;
+}
+
+h2,
+.cd-h2 {
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: -0.005em;
+}
+
+h3,
+.cd-h3 {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.cd-secondary {
+  color: var(--text-secondary);
+}
+
+.cd-muted {
+  color: var(--text-muted);
+}
+
+.cd-mono {
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+/* Opt-in, and only where figures stack in a column that must align. */
+.cd-num {
+  font-variant-numeric: tabular-nums;
+}
+
+.cd-kbd {
+  display: inline-flex;
+  align-items: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border: 1px solid var(--border);
+  border-bottom-width: 2px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1;
+}
+
+/* --------------------------------------------------------------------------
+   Focus + accessibility helpers
+   -------------------------------------------------------------------------- */
+
+:focus {
+  outline: none;
+}
+
+:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+.cd-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+.cd-live {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+}
+
+.cd-skip {
+  position: fixed;
+  z-index: 60;
+  top: var(--space-2);
+  left: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow);
+  transform: translateY(-200%);
+}
+
+.cd-skip:focus-visible {
+  transform: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* --------------------------------------------------------------------------
+   Scrollbars
+   -------------------------------------------------------------------------- */
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--axis) transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  border: 3px solid transparent;
+  border-radius: 999px;
+  background-clip: content-box;
+  background-color: var(--axis);
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background-color: var(--text-muted);
+}
+
+*::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/* --------------------------------------------------------------------------
+   App shell grid
+   -------------------------------------------------------------------------- */
+
+.cd-app {
+  --cd-titlebar: 46px;
+  --cd-sidebar: 216px;
+  display: grid;
+  grid-template-columns: var(--cd-sidebar) minmax(0, 1fr);
+  grid-template-rows: var(--cd-titlebar) minmax(0, 1fr);
+  grid-template-areas:
+    "titlebar titlebar"
+    "sidebar  view";
+  height: 100vh;
+  overflow: hidden;
+  background: var(--plane);
+}
+
+.cd-app[data-sidebar="collapsed"] {
+  --cd-sidebar: 60px;
+}
+
+.cd-main {
+  grid-area: view;
+  min-width: 0;
+  overflow: auto;
+  padding: var(--space-5) var(--space-5) var(--space-6);
+}
+
+.cd-view {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+  max-width: 1180px;
+  margin: 0 auto;
+}
+
+.cd-view-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-2) var(--space-3);
+}
+
+.cd-view-sub {
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.cd-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.cd-stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.cd-spacer {
+  flex: 1 1 auto;
+}
+
+.cd-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(var(--cd-min-col, 260px), 1fr));
+  gap: var(--space-4);
+}
+
+.cd-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface-1);
+}
+
+.cd-card--raised {
+  background: var(--surface-raised);
+  box-shadow: var(--shadow);
+}
+
+.cd-card-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.cd-divider {
+  height: 1px;
+  border: 0;
+  margin: 0;
+  background: var(--border);
+}
+
+/* --------------------------------------------------------------------------
+   Tables (chart table views and account lists share this)
+   -------------------------------------------------------------------------- */
+
+.cd-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.cd-table caption {
+  padding-bottom: var(--space-2);
+  color: var(--text-secondary);
+  text-align: left;
+}
+
+.cd-table th,
+.cd-table td {
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--grid);
+  text-align: left;
+  vertical-align: middle;
+}
+
+.cd-table thead th {
+  border-bottom-color: var(--axis);
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.cd-table td.cd-num,
+.cd-table th.cd-num {
+  text-align: right;
+}
+
+.cd-table tbody tr:hover {
+  background: color-mix(in srgb, var(--text-primary) 4%, transparent);
+}
+
+/* --------------------------------------------------------------------------
+   Icon
+   -------------------------------------------------------------------------- */
+
+.cd-icon {
+  flex: none;
+  color: inherit;
+}
+
+.cd-spin {
+  animation: cd-spin 900ms linear infinite;
+}
+
+@keyframes cd-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* --------------------------------------------------------------------------
+   Button
+   -------------------------------------------------------------------------- */
+
+.cd-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  height: 32px;
+  padding: 0 var(--space-3);
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  font-size: 13px;
+  font-weight: 500;
+  white-space: nowrap;
+  /* The press scale lives in motion.css; the release is transitioned here so
+     it eases back on the confirm curve instead of snapping. */
+  transition:
+    background-color var(--dur-fast) var(--ease-exit),
+    border-color var(--dur-fast) var(--ease-exit),
+    color var(--dur-fast) var(--ease-exit),
+    transform var(--dur-instant) var(--ease-confirm);
+}
+
+.cd-btn--sm {
+  height: 26px;
+  padding: 0 var(--space-2);
+  font-size: 12px;
+}
+
+.cd-btn--block {
+  width: 100%;
+}
+
+.cd-btn--icon {
+  width: 32px;
+  padding: 0;
+}
+
+.cd-btn--icon.cd-btn--sm {
+  width: 26px;
+}
+
+.cd-btn:disabled {
+  opacity: 0.5;
+}
+
+.cd-btn--primary {
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+
+.cd-btn--primary:hover:not(:disabled) {
+  background: var(--accent-hover);
+}
+
+.cd-btn--secondary {
+  border-color: var(--border-strong);
+  background: var(--surface-raised);
+  color: var(--text-primary);
+}
+
+.cd-btn--secondary:hover:not(:disabled) {
+  background: var(--surface-2);
+}
+
+.cd-btn--ghost {
+  color: var(--text-secondary);
+}
+
+.cd-btn--ghost:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--text-primary) 7%, transparent);
+  color: var(--text-primary);
+}
+
+/* Destructive intent is carried by the icon and the label; the critical hue
+   only tints the surround, so color is never the sole cue. */
+.cd-btn--danger {
+  border-color: color-mix(in srgb, var(--status-critical) 45%, transparent);
+  background: color-mix(in srgb, var(--status-critical) 10%, var(--surface-raised));
+  color: var(--text-primary);
+}
+
+.cd-btn--danger .cd-icon {
+  color: var(--status-critical);
+}
+
+.cd-btn--danger:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--status-critical) 18%, var(--surface-raised));
+  border-color: var(--status-critical);
+}
+
+/* --------------------------------------------------------------------------
+   Badge
+   -------------------------------------------------------------------------- */
+
+.cd-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  height: 20px;
+  padding: 0 var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--text-primary);
+  font-size: 11px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.cd-badge .cd-icon {
+  margin-left: -2px;
+}
+
+.cd-badge--neutral .cd-icon {
+  color: var(--status-neutral);
+}
+
+.cd-badge--accent {
+  border-color: color-mix(in srgb, var(--accent) 40%, transparent);
+  background: var(--accent-wash);
+}
+
+.cd-badge--accent .cd-icon {
+  color: var(--accent);
+}
+
+.cd-badge--info {
+  border-color: color-mix(in srgb, var(--seq-400) 40%, transparent);
+  background: color-mix(in srgb, var(--seq-400) 12%, var(--surface-1));
+}
+
+.cd-badge--info .cd-icon {
+  color: var(--seq-400);
+}
+
+.cd-badge--good {
+  border-color: color-mix(in srgb, var(--status-good) 40%, transparent);
+  background: color-mix(in srgb, var(--status-good) 12%, var(--surface-1));
+}
+
+.cd-badge--good .cd-icon {
+  color: var(--status-good-text);
+}
+
+.cd-badge--warning {
+  border-color: color-mix(in srgb, var(--status-warning) 55%, transparent);
+  background: color-mix(in srgb, var(--status-warning) 18%, var(--surface-1));
+}
+
+.cd-badge--warning .cd-icon {
+  color: color-mix(in srgb, var(--status-warning) 80%, var(--text-primary));
+}
+
+.cd-badge--serious {
+  border-color: color-mix(in srgb, var(--status-serious) 55%, transparent);
+  background: color-mix(in srgb, var(--status-serious) 16%, var(--surface-1));
+}
+
+.cd-badge--serious .cd-icon {
+  color: color-mix(in srgb, var(--status-serious) 80%, var(--text-primary));
+}
+
+.cd-badge--critical {
+  border-color: color-mix(in srgb, var(--status-critical) 50%, transparent);
+  background: color-mix(in srgb, var(--status-critical) 14%, var(--surface-1));
+}
+
+.cd-badge--critical .cd-icon {
+  color: var(--status-critical);
+}
+
+/* --------------------------------------------------------------------------
+   Toggle
+   -------------------------------------------------------------------------- */
+
+.cd-toggle {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  width: 100%;
+  padding: var(--space-1) 0;
+  text-align: left;
+}
+
+.cd-toggle:disabled {
+  opacity: 0.55;
+}
+
+.cd-toggle-track {
+  position: relative;
+  flex: none;
+  width: 34px;
+  height: 20px;
+  margin-top: 1px;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  background: var(--surface-2);
+  transition:
+    background-color var(--dur-fast) var(--ease-exit),
+    border-color var(--dur-fast) var(--ease-exit),
+    transform var(--dur-instant) var(--ease-confirm);
+}
+
+.cd-toggle[aria-checked="true"] .cd-toggle-track {
+  border-color: var(--accent);
+  background: var(--accent);
+}
+
+.cd-toggle-knob {
+  position: absolute;
+  top: 1px;
+  left: 1px;
+  display: grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 999px;
+  background: var(--surface-raised);
+  box-shadow: var(--shadow);
+  color: var(--accent);
+  /* Off is a plain recede; on overshoots a little — see motion.css. */
+  transition: transform var(--dur-fast) var(--ease-exit);
+}
+
+.cd-toggle[aria-checked="true"] .cd-toggle-knob {
+  transform: translateX(14px);
+}
+
+.cd-toggle-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.cd-toggle-label {
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.cd-toggle-desc {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+/* --------------------------------------------------------------------------
+   Modal
+   -------------------------------------------------------------------------- */
+
+.cd-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-5);
+  background: color-mix(in srgb, var(--plane) 70%, transparent);
+  backdrop-filter: blur(2px);
+}
+
+.cd-modal {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  width: min(100%, var(--cd-modal-w, 520px));
+  max-height: min(86vh, 720px);
+  overflow: hidden;
+  padding: var(--space-4);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-lg);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow);
+}
+
+.cd-modal--sm {
+  --cd-modal-w: 400px;
+}
+
+.cd-modal--lg {
+  --cd-modal-w: 760px;
+}
+
+.cd-modal-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.cd-modal-title {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.cd-modal-desc {
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.cd-modal-body {
+  min-height: 0;
+  overflow: auto;
+}
+
+.cd-modal-foot {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--border);
+}
+
+/* --------------------------------------------------------------------------
+   Title bar
+   -------------------------------------------------------------------------- */
+
+.cd-titlebar {
+  grid-area: titlebar;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 0 var(--space-3);
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-1);
+  -webkit-app-region: drag;
+}
+
+.cd-titlebar button,
+.cd-titlebar a,
+.cd-titlebar input {
+  -webkit-app-region: no-drag;
+}
+
+.cd-brand {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding-right: var(--space-3);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.cd-brand .cd-icon {
+  color: var(--accent);
+}
+
+.cd-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  max-width: 340px;
+  height: 28px;
+  padding: 0 var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface-raised);
+  font-size: 12px;
+}
+
+.cd-chip:hover {
+  border-color: var(--border-strong);
+  background: var(--surface-2);
+}
+
+.cd-chip-email {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cd-chip-slot {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.cd-chip--empty .cd-icon:first-child {
+  color: var(--status-warning);
+}
+
+.cd-search-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  height: 28px;
+  padding: 0 var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.cd-search-btn:hover {
+  border-color: var(--border-strong);
+  color: var(--text-primary);
+}
+
+/* --------------------------------------------------------------------------
+   Sidebar
+   -------------------------------------------------------------------------- */
+
+.cd-sidebar {
+  grid-area: sidebar;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  padding: var(--space-3) var(--space-2);
+  border-right: 1px solid var(--border);
+  background: var(--surface-1);
+}
+
+.cd-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.cd-nav-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  width: 100%;
+  height: 34px;
+  padding: 0 var(--space-3);
+  border-radius: var(--radius);
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 500;
+  text-align: left;
+}
+
+.cd-nav-item:hover {
+  background: color-mix(in srgb, var(--text-primary) 6%, transparent);
+  color: var(--text-primary);
+}
+
+.cd-nav-item[aria-current="page"] {
+  background: var(--accent-wash);
+  color: var(--text-primary);
+}
+
+.cd-nav-item[aria-current="page"] .cd-icon {
+  color: var(--accent);
+}
+
+.cd-nav-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cd-nav-count {
+  margin-left: auto;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.cd-sidebar-foot {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding-top: var(--space-2);
+  margin-top: var(--space-2);
+  border-top: 1px solid var(--border);
+}
+
+.cd-sidebar-note {
+  padding: var(--space-2) var(--space-3);
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.cd-app[data-sidebar="collapsed"] .cd-nav-item {
+  justify-content: center;
+  padding: 0;
+}
+
+.cd-app[data-sidebar="collapsed"] .cd-nav-label,
+.cd-app[data-sidebar="collapsed"] .cd-nav-count,
+.cd-app[data-sidebar="collapsed"] .cd-sidebar-note {
+  display: none;
+}
+
+/* --------------------------------------------------------------------------
+   Command palette
+   -------------------------------------------------------------------------- */
+
+.cd-palette-overlay {
+  align-items: flex-start;
+  padding-top: 12vh;
+}
+
+.cd-palette {
+  display: flex;
+  flex-direction: column;
+  width: min(100%, 560px);
+  max-height: 62vh;
+  overflow: hidden;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-lg);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow);
+}
+
+.cd-palette-search {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border-bottom: 1px solid var(--border);
+  color: var(--text-muted);
+}
+
+.cd-palette-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  border: none;
+  background: none;
+  outline: none;
+  font-size: 14px;
+}
+
+.cd-palette-input::placeholder {
+  color: var(--text-muted);
+}
+
+.cd-palette-list {
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--space-1);
+}
+
+.cd-palette-group {
+  padding: var(--space-2) var(--space-3) var(--space-1);
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.cd-palette-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius);
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.cd-palette-item[aria-selected="true"] {
+  background: var(--accent-wash);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+.cd-palette-item[aria-disabled="true"] {
+  color: var(--text-muted);
+  cursor: not-allowed;
+}
+
+.cd-palette-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+}
+
+.cd-palette-hint {
+  margin-left: auto;
+  padding-left: var(--space-3);
+  color: var(--text-muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.cd-palette-foot {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border-top: 1px solid var(--border);
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.cd-palette-empty {
+  padding: var(--space-5) var(--space-3);
+  color: var(--text-secondary);
+  font-size: 13px;
+  text-align: center;
+}
+
+/* --------------------------------------------------------------------------
+   Empty state + splash
+   -------------------------------------------------------------------------- */
+
+.cd-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-6) var(--space-5);
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-lg);
+  background: var(--surface-1);
+  text-align: center;
+}
+
+.cd-empty-icon {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--text-secondary);
+}
+
+.cd-empty--warning .cd-empty-icon {
+  background: color-mix(in srgb, var(--status-warning) 18%, var(--surface-1));
+  color: color-mix(in srgb, var(--status-warning) 80%, var(--text-primary));
+}
+
+.cd-empty--info .cd-empty-icon {
+  background: color-mix(in srgb, var(--seq-400) 14%, var(--surface-1));
+  color: var(--seq-400);
+}
+
+.cd-empty-body {
+  max-width: 46ch;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.cd-splash {
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: var(--space-3);
+  height: 100vh;
+  color: var(--text-secondary);
+}
+
+.cd-view-loading {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-6);
+  color: var(--text-muted);
+  font-size: 13px;
+}

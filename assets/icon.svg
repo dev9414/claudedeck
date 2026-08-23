@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Application icon: the mark on a rounded tile.
+
+  The tile is the dark chart surface (#16150f) rather than pure black so the
+  icon sits correctly beside other warm-dark developer tools, and the mark is
+  scaled to 68% of the tile with the corner radius at 22.4% of the edge — the
+  proportion Windows and macOS both read as a "squircle" without either
+  platform's mask clipping the glyph.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512" role="img" aria-label="ClaudeDeck">
+  <title>ClaudeDeck</title>
+  <rect width="512" height="512" rx="115" ry="115" fill="#16150f" />
+  <g transform="translate(25.6 25.6) scale(7.2)" fill="none" stroke-width="7" stroke-linecap="round">
+    <path d="M 19 13.5 L 19 50.5" stroke="#e08a6d" />
+    <path d="M 19 13.5 A 26 18.5 0 0 1 40.55 21.66" stroke="#e08a6d" />
+    <path d="M 42.37 23.89 A 26 18.5 0 0 1 41.52 41.25" stroke="#3987e5" />
+    <path d="M 39.49 43.39 A 26 18.5 0 0 1 19 50.5" stroke="#199e70" />
+  </g>
+</svg>

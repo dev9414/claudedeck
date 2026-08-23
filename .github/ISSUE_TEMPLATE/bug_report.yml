@@ -1,0 +1,143 @@
+name: Bug report
+description: Something in ClaudeDeck behaves differently from how it is documented.
+title: "bug: "
+labels: ["bug", "needs triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## Before you type anything: never paste a token
+
+        ClaudeDeck handles OAuth tokens and API keys. Anything beginning with
+        `sk-ant-oat…`, `sk-ant-ort…` or `sk-ant-api…` is a **live credential** —
+        pasting one into a public issue hands your account to whoever reads it
+        next, and editing the comment afterwards removes it from neither the
+        edit history nor the notification emails already sent.
+
+        The same goes for screenshots and log files. ClaudeDeck itself only ever
+        records a 12-character fingerprint, so a copied ClaudeDeck log is safe;
+        a raw `.credentials.json` or a terminal capture from another tool is not.
+
+        **If you have already leaked a token, rotate it before you do anything
+        else:** sign out of Claude Code and sign back in, which invalidates the
+        old pair. Then report the bug here without it.
+
+        If the bug *is* the leak — ClaudeDeck putting a secret somewhere it
+        should not — do not file it here. Use
+        [private security advisories](https://github.com/dev9414/claudedeck/security/advisories/new)
+        instead.
+
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: Ground rules
+      options:
+        - label: I searched the existing issues and this is not already reported.
+          required: true
+        - label: This report contains no tokens, API keys, or credential file contents.
+          required: true
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What did ClaudeDeck do, and what did you expect it to do instead?
+      placeholder: |
+        Auto-switch moved off slot 2 at 61% even though the threshold is 85%.
+        I expected it to stay on slot 2 until 85%.
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Number them. "It only happens sometimes" is a useful answer - say what you were doing when it did.
+      placeholder: |
+        1. Add two Max accounts.
+        2. Turn on auto-switch with strategy "best" and threshold 85.
+        3. Use Claude Code until the active account passes 60%.
+        4. Watch the Automation view.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - Windows 11
+        - Windows 10
+        - macOS (Apple Silicon)
+        - macOS (Intel)
+        - Linux - Debian or Ubuntu
+        - Linux - other
+        - WSL
+    validations:
+      required: true
+
+  - type: input
+    id: os-detail
+    attributes:
+      label: OS version
+      description: The exact build if you have it. Path handling differs between them more than it should.
+      placeholder: "Windows 11 26200 / macOS 15.2 / Ubuntu 24.04"
+
+  - type: input
+    id: version
+    attributes:
+      label: ClaudeDeck version
+      description: Shown in Settings, in the window title bar, and by `claudedeck --version`.
+      placeholder: "0.1.0"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: install-method
+    attributes:
+      label: How did you install it?
+      options:
+        - Windows installer (.exe, NSIS)
+        - macOS disk image (.dmg)
+        - Linux AppImage
+        - Linux .deb
+        - Built from source (npm run build)
+        - Development mode (npm run dev)
+    validations:
+      required: true
+
+  - type: dropdown
+    id: account-kind
+    attributes:
+      label: What kind of account is involved?
+      description: API-key accounts carry no subscription quota, which changes how ClaudeDeck treats them.
+      options:
+        - Claude subscription (Pro or Max)
+        - Managed API key
+        - A mix of both
+        - Not account-specific
+    validations:
+      required: true
+
+  - type: dropdown
+    id: safe-mode
+    attributes:
+      label: Was safe mode on?
+      description: Safe mode refuses every disk write, so it changes what a failure looks like.
+      options:
+        - "No"
+        - "Yes"
+        - Not sure
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs or error text
+      description: The error banner text, or the relevant lines from the Automation decision log. Read them once more before you submit.
+      render: text
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else
+      description: Screenshots with the account emails blurred, a non-default CLAUDE_CONFIG_DIR, an unusual install layout.

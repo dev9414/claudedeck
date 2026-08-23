@@ -1,0 +1,11 @@
+* text=auto eol=lf
+
+*.png binary
+*.ico binary
+*.icns binary
+
+# Generated from assets/icon.svg by scripts/make-icons.mjs; committed so the
+# repo builds without a rasterizer, but excluded from diffs since a byte-level
+# diff of a PNG helps nobody.
+assets/icon*.png -diff linguist-generated
+assets/screenshots/*.png -diff linguist-generated

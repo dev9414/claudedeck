@@ -1,0 +1,186 @@
+/*
+ * ClaudeDeck design tokens.
+ *
+ * The categorical series slots and the surfaces below are not taste — they are
+ * a validated set. Both modes clear the lightness band, chroma floor, adjacent
+ * CVD separation (worst 9.1 light / 8.4 dark, target >= 8) and normal-vision
+ * floor (worst 19.6 light / 19.3 dark, floor >= 15) against the exact surfaces
+ * declared here. Do not edit a --series-* or --surface-* value without
+ * re-running the validator on the whole set.
+ *
+ * Two standing rules:
+ *   1. --accent is chrome only. It never appears inside a chart plot area,
+ *      so a brand color can never be mistaken for a data series.
+ *   2. Status colors are reserved for state. Three light-mode series slots and
+ *      the warning/serious status steps sit below 3:1 on the light surface, so
+ *      every status cue ships an icon + text label and every chart ships either
+ *      direct labels or its table view. Color never carries meaning alone.
+ */
+
+:root {
+  color-scheme: light;
+
+  /* --- surfaces + ink ------------------------------------------------- */
+  --plane: #faf9f5;
+  --surface-1: #fcfcfb;
+  --surface-2: #f4f3ee;
+  --surface-raised: #ffffff;
+  --text-primary: #0b0b0b;
+  --text-secondary: #52514e;
+  --text-muted: #898781;
+  --grid: #e1e0d9;
+  --axis: #c3c2b7;
+  --border: rgba(11, 11, 11, 0.1);
+  --border-strong: rgba(11, 11, 11, 0.18);
+  --shadow: 0 1px 2px rgba(11, 11, 11, 0.06), 0 8px 24px rgba(11, 11, 11, 0.06);
+
+  /* --- chrome accent (never a data mark) ------------------------------ */
+  --accent: #c65f3f;
+  --accent-hover: #ad5034;
+  --accent-ink: #ffffff;
+  --accent-wash: rgba(198, 95, 63, 0.1);
+  --focus-ring: #2a78d6;
+
+  /* --- categorical series (fixed order, never cycled) ----------------- */
+  --series-1: #2a78d6;
+  --series-2: #eb6834;
+  --series-3: #1baf7a;
+  --series-4: #eda100;
+  --series-5: #e87ba4;
+  --series-6: #008300;
+  --series-7: #4a3aa7;
+  --series-8: #e34948;
+
+  /* --- sequential (single hue, light -> dark) ------------------------- */
+  --seq-100: #cde2fb;
+  --seq-250: #86b6ef;
+  --seq-400: #3987e5;
+  --seq-550: #1c5cab;
+  --seq-700: #0d366b;
+
+  /* --- status (reserved; always paired with icon + label) ------------- */
+  --status-good: #0ca30c;
+  --status-warning: #fab219;
+  --status-serious: #ec835a;
+  --status-critical: #d03b3b;
+  --status-good-text: #006300;
+  --status-neutral: #898781;
+
+  /* --- type + metrics -------------------------------------------------- */
+  --font-sans: system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono: ui-monospace, 'Cascadia Mono', 'SF Mono', Menlo, monospace;
+  --radius-sm: 4px;
+  --radius: 8px;
+  --radius-lg: 12px;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+}
+
+/* Dark steps are selected for the dark surface, not an automatic flip of the
+   light values. Declared under both the OS media query and the explicit theme
+   stamp so an in-app toggle wins either direction. */
+@media (prefers-color-scheme: dark) {
+  :root:where(:not([data-theme='light'])) {
+    color-scheme: dark;
+    --plane: #0d0d0b;
+    --surface-1: #16150f;
+    --surface-2: #1e1d16;
+    --surface-raised: #22211a;
+    --text-primary: #ffffff;
+    --text-secondary: #c3c2b7;
+    --text-muted: #898781;
+    --grid: #2c2c2a;
+    --axis: #383835;
+    --border: rgba(255, 255, 255, 0.1);
+    --border-strong: rgba(255, 255, 255, 0.18);
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.5), 0 8px 24px rgba(0, 0, 0, 0.4);
+
+    --accent: #e08a6d;
+    --accent-hover: #eb9d82;
+    --accent-ink: #16150f;
+    --accent-wash: rgba(224, 138, 109, 0.14);
+    --focus-ring: #3987e5;
+
+    --series-1: #3987e5;
+    --series-2: #d95926;
+    --series-3: #199e70;
+    --series-4: #c98500;
+    --series-5: #d55181;
+    --series-6: #008300;
+    --series-7: #9085e9;
+    --series-8: #e66767;
+
+    --seq-100: #0d366b;
+    --seq-250: #184f95;
+    --seq-400: #256abf;
+    --seq-550: #3987e5;
+    --seq-700: #9ec5f4;
+
+    --status-good-text: #0ca30c;
+  }
+}
+
+:root[data-theme='dark'] {
+  color-scheme: dark;
+  --plane: #0d0d0b;
+  --surface-1: #16150f;
+  --surface-2: #1e1d16;
+  --surface-raised: #22211a;
+  --text-primary: #ffffff;
+  --text-secondary: #c3c2b7;
+  --text-muted: #898781;
+  --grid: #2c2c2a;
+  --axis: #383835;
+  --border: rgba(255, 255, 255, 0.1);
+  --border-strong: rgba(255, 255, 255, 0.18);
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.5), 0 8px 24px rgba(0, 0, 0, 0.4);
+
+  --accent: #e08a6d;
+  --accent-hover: #eb9d82;
+  --accent-ink: #16150f;
+  --accent-wash: rgba(224, 138, 109, 0.14);
+  --focus-ring: #3987e5;
+
+  --series-1: #3987e5;
+  --series-2: #d95926;
+  --series-3: #199e70;
+  --series-4: #c98500;
+  --series-5: #d55181;
+  --series-6: #008300;
+  --series-7: #9085e9;
+  --series-8: #e66767;
+
+  --seq-100: #0d366b;
+  --seq-250: #184f95;
+  --seq-400: #256abf;
+  --seq-550: #3987e5;
+  --seq-700: #9ec5f4;
+
+  --status-good-text: #0ca30c;
+}
+
+/* Texture is the accessibility channel: off by default, switched on by the
+   user setting, by print, and by forced-colors. Never decorative. */
+:root {
+  --texture-enabled: 0;
+}
+
+:root[data-texture='on'] {
+  --texture-enabled: 1;
+}
+
+@media print {
+  :root {
+    --texture-enabled: 1;
+  }
+}
+
+@media (forced-colors: active) {
+  :root {
+    --texture-enabled: 1;
+  }
+}

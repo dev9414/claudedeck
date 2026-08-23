@@ -1,0 +1,37 @@
+/*
+ * Mark animation.
+ *
+ * Each stroke is normalised to pathLength 100, so one keyframe draws all four
+ * regardless of their real arc lengths. The stagger is derived from the stroke
+ * index rather than written out per-path, which keeps the sequence intact if a
+ * segment is ever added or reordered.
+ *
+ * The whole thing is inside a no-preference query: under reduced motion the
+ * mark simply appears, fully drawn, with no transition to interrupt.
+ */
+
+.cd-logo {
+  display: block;
+  flex: none;
+  overflow: visible;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .cd-logo--draw path {
+    /* 100 = the full normalised length of any path in this mark. */
+    stroke-dasharray: 100;
+    stroke-dashoffset: 100;
+    animation: cd-logo-draw 560ms cubic-bezier(0.22, 0.61, 0.36, 1) forwards;
+    /* 90ms per stroke, in draw order: stem, then bowl top to bottom. */
+    animation-delay: calc(var(--cd-logo-i, 0) * 90ms);
+  }
+}
+
+@keyframes cd-logo-draw {
+  from {
+    stroke-dashoffset: 100;
+  }
+  to {
+    stroke-dashoffset: 0;
+  }
+}

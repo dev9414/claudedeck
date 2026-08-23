@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <!--
+      No CSP meta tag on purpose: the renderer is loaded from disk in production
+      and from the dev server in development, and a meta policy strict enough to
+      matter also blocks the dev-server refresh preamble. The main process sets
+      the real policy on the session response headers instead.
+    -->
+    <title>ClaudeDeck</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="./main.tsx"></script>
+  </body>
+</html>

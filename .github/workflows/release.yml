@@ -1,0 +1,167 @@
+# Build and publish ClaudeDeck installers for a `v*` tag.
+#
+# Flow: one job opens (or reuses) a draft release, the three platform jobs build
+# with electron-builder and upload into that draft, and a last job flips the
+# draft to published. Creating the draft up front is deliberate — if each
+# platform job created its own, three parallel electron-builder runs would race
+# and can leave two half-filled releases behind.
+#
+# `electron-builder.yml` already sets `publish: github`, so the only thing the
+# CLI needs from us is a token and a platform flag.
+
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  # Manual runs build the installers and upload them to the workflow run only;
+  # nothing is published without a tag.
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  npm_config_fund: "false"
+  npm_config_audit: "false"
+
+jobs:
+  draft:
+    name: Open the draft release
+    # A fork has neither the release to write to nor a reason to spend the
+    # minutes; `github.repository_owner` is deliberately not hard-coded so a
+    # legitimate rename does not silently disable releases.
+    if: github.event_name == 'push' && github.event.repository.fork == false
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Refuse a tag that disagrees with package.json
+        shell: bash
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          pkg="$(node -p "require('./package.json').version")"
+          if [ "$tag" != "$pkg" ]; then
+            echo "::error::Tag ${GITHUB_REF_NAME} does not match package.json version ${pkg}. Bump one of them and re-tag."
+            exit 1
+          fi
+          echo "Releasing ${pkg} from ${GITHUB_REF_NAME}."
+
+      - name: Create the draft if it does not exist
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            echo "Reusing the existing release for $GITHUB_REF_NAME."
+          else
+            gh release create "$GITHUB_REF_NAME" \
+              --draft \
+              --title "ClaudeDeck $GITHUB_REF_NAME" \
+              --generate-notes
+          fi
+
+  build:
+    name: ${{ matrix.label }}
+    needs: [draft]
+    # `draft` is skipped on a manual run; that must not skip the build with it.
+    if: ${{ !cancelled() && github.event.repository.fork == false && (needs.draft.result == 'success' || needs.draft.result == 'skipped') }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            platform: linux
+            label: Linux (AppImage, deb)
+          - os: windows-latest
+            platform: win
+            label: Windows (NSIS x64, arm64)
+          - os: macos-latest
+            platform: mac
+            label: macOS (dmg x64, arm64)
+
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Cache the Electron and electron-builder downloads
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/electron
+            ~/.cache/electron-builder
+            ~/Library/Caches/electron
+            ~/Library/Caches/electron-builder
+            ~/AppData/Local/electron/Cache
+            ~/AppData/Local/electron-builder/Cache
+          key: builder-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            builder-${{ runner.os }}-
+
+      # electron-builder shells out to bsdtar when it assembles the .deb.
+      - name: Install Linux packaging tools
+        if: matrix.platform == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libarchive-tools
+
+      - name: Install
+        run: npm ci
+
+      - name: Build the app bundle
+        run: npm run build
+
+      - name: Package${{ github.event_name == 'push' && ' and publish' || '' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # ClaudeDeck ships unsigned. Without this, electron-builder picks up
+          # whatever identity a runner happens to have and fails at the notary
+          # step instead of producing a dmg.
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+        run: npx --no-install electron-builder --${{ matrix.platform }} --publish ${{ github.event_name == 'push' && 'always' || 'never' }}
+
+      - name: Attach the installers to the workflow run
+        uses: actions/upload-artifact@v4
+        with:
+          name: claudedeck-${{ matrix.platform }}
+          if-no-files-found: error
+          retention-days: 14
+          path: |
+            release/*.exe
+            release/*.dmg
+            release/*.AppImage
+            release/*.deb
+            release/*.blockmap
+            release/latest*.yml
+
+  publish:
+    name: Publish the release
+    needs: [build]
+    if: github.event_name == 'push' && github.event.repository.fork == false
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Flip the draft to published
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          gh release edit "$GITHUB_REF_NAME" --draft=false --latest
+          gh release view "$GITHUB_REF_NAME" --json assets \
+            --jq '.assets[] | "published \(.name) (\(.size) bytes)"'

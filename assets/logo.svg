@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  ClaudeDeck mark — original geometry, drawn by hand.
+
+  A letterform "D" whose bowl is cut into three arc segments: the product's own
+  subject matter, since what the app shows is a set of quota windows filling up.
+  The stem is the deck; the segments are the windows; the leading segment
+  carries the accent because it is the one that binds first.
+
+  Construction, on a 64 grid with stroke 7 (half-stroke 3.5):
+    stem      vertical at x=19, cap centres y=13.5 and y=50.5, so the round
+              caps land exactly on y=10 and y=54
+    bowl      ellipse centred (19,32), rx=26 ry=18.5, swept clockwise from
+              -90deg to +90deg. ry matches the stem's cap centres, so the bowl
+              joins the stem flush instead of overshooting it.
+    splits    at -34/-26 and 30/38, leaving two 8deg gaps
+    extents   x 15.5..48.5, y 10..54 — optically centred on the 64 grid
+
+  Holds together down to 16px and in a single colour; see logo-mono.svg.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="ClaudeDeck">
+  <title>ClaudeDeck</title>
+  <g fill="none" stroke-width="7" stroke-linecap="round">
+    <!-- stem -->
+    <path d="M 19 13.5 L 19 50.5" stroke="#c65f3f" />
+    <!-- bowl, leading segment: the window that binds first -->
+    <path d="M 19 13.5 A 26 18.5 0 0 1 40.55 21.66" stroke="#c65f3f" />
+    <!-- bowl, middle segment -->
+    <path d="M 42.37 23.89 A 26 18.5 0 0 1 41.52 41.25" stroke="#2a78d6" />
+    <!-- bowl, trailing segment -->
+    <path d="M 39.49 43.39 A 26 18.5 0 0 1 19 50.5" stroke="#1baf7a" />
+  </g>
+</svg>

@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  ClaudeDeck mark, single colour. Same geometry as logo.svg; the segment gaps
+  do the work that colour does in the full-colour version, which is why they
+  are cut at 8deg rather than hairline. Inherits `currentColor`, so it can be
+  dropped into a stencil, a favicon, or a monochrome tray.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" fill="none" role="img" aria-label="ClaudeDeck">
+  <title>ClaudeDeck</title>
+  <g stroke="currentColor" stroke-width="7" stroke-linecap="round">
+    <path d="M 19 13.5 L 19 50.5" />
+    <path d="M 19 13.5 A 26 18.5 0 0 1 40.55 21.66" />
+    <path d="M 42.37 23.89 A 26 18.5 0 0 1 41.52 41.25" />
+    <path d="M 39.49 43.39 A 26 18.5 0 0 1 19 50.5" />
+  </g>
+</svg>

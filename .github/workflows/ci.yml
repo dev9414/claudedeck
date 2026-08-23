@@ -1,0 +1,96 @@
+# Typecheck, test and build ClaudeDeck on every supported platform.
+#
+# The matrix is wide on purpose: ClaudeDeck reads and writes files in the user's
+# home directory and its path handling differs per OS, so a green run on Linux
+# alone proves very little. Nothing here signs or publishes anything — that is
+# release.yml's job.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# A newer push to the same ref makes the older run pointless.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  # Installers only; a CI failure should read as a stack trace, not a spinner.
+  npm_config_fund: "false"
+  npm_config_audit: "false"
+  FORCE_COLOR: "1"
+
+jobs:
+  verify:
+    name: ${{ matrix.os }} · node ${{ matrix.node }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      # Stop the whole matrix on the first red cell: six jobs failing the same
+      # way costs six times the minutes and says the same thing.
+      fail-fast: true
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        node: ["20", "22"]
+
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Set up Node ${{ matrix.node }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+
+      # electron's postinstall pulls a ~100 MB zip that npm's own cache does not
+      # cover. Caching it is the single biggest win available here.
+      - name: Cache the Electron download
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/electron
+            ~/Library/Caches/electron
+            ~/AppData/Local/electron/Cache
+          key: electron-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            electron-${{ runner.os }}-
+
+      - name: Install
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test
+        run: npm test
+
+      - name: Build
+        run: npm run build
+
+  palette:
+    # The colour gate is pure arithmetic over tokens.css — platform-independent,
+    # and under a second. Running it once beside the matrix keeps a palette
+    # regression from reaching main without paying for it six times.
+    name: palette gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      # No install step: the validator has no dependencies, by design.
+      - name: Validate the categorical palette
+        run: node scripts/validate-palette.mjs

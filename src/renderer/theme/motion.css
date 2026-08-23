@@ -1,0 +1,396 @@
+/*
+ * Motion system.
+ *
+ * One rule decides what belongs here: motion must explain a state change. A
+ * bar that grows says "this went up". A panel that rises says "this is on top
+ * of what you were reading". A shimmer says "still fetching". Nothing in this
+ * file exists to be looked at.
+ *
+ * Everything is built from the four durations and three curves declared below.
+ * A literal millisecond value anywhere else in the app is a bug, in the same
+ * way a literal hex is: it means a decision was made twice.
+ *
+ * Reduced motion is not a downgrade path bolted on at the end. The duration
+ * scale collapses to a single tick under `prefers-reduced-motion: reduce`, so
+ * every transition built on it collapses with it, and every keyframe animation
+ * is declared inside `prefers-reduced-motion: no-preference`, so under reduce
+ * it does not exist at all. Nothing loops under reduce, ever.
+ *
+ * The only three loops in the whole app are the loading shimmer, the status
+ * pulse, and the pre-existing busy spinner — each one a claim that something is
+ * still happening.
+ */
+
+:root {
+  /* --- duration scale -------------------------------------------------- */
+  /* Echo under the finger: a press, a knob flipping. Below ~100ms motion
+     stops reading as motion and starts reading as response. */
+  --dur-instant: 90ms;
+  /* Property changes on a thing already on screen: hover, focus, colour. */
+  --dur-fast: 140ms;
+  /* An element arriving or leaving: views, dialogs, list rows. */
+  --dur-base: 220ms;
+  /* A value re-drawing itself: bars, lines, counted figures. */
+  --dur-slow: 380ms;
+
+  /* --- easing ---------------------------------------------------------- */
+  /* Entrances. Leaves quickly, settles slowly — the shape of something
+     arriving under its own weight. Also used for anything growing. */
+  --ease-entrance: cubic-bezier(0.16, 0.84, 0.44, 1);
+  /* Exits. Starts slowly, accelerates away — the shape of something
+     dismissed. Used on the receding half of a two-way transition. */
+  --ease-exit: cubic-bezier(0.45, 0, 0.85, 0.4);
+  /* Confirmations. A small overshoot that settles back, for the moment an
+     action commits: a switch turning on, a button releasing. Never for
+     entrances — an overshoot on arrival reads as a bounce. */
+  --ease-confirm: cubic-bezier(0.22, 1.2, 0.36, 1);
+
+  /* --- travel + rhythm -------------------------------------------------- */
+  /* Travel distances borrow the spacing scale rather than inventing one, so a
+     view's drift and a panel's rise stay in the same rhythm as its padding. */
+  --motion-travel: var(--space-1); /* 4px — a view cross-fading in place */
+  --motion-lift: var(--space-2); /* 8px  — a panel rising over the plane */
+  --motion-stagger: 18ms; /* per-row delay in a list reveal */
+  --motion-draw: calc(var(--dur-slow) * 2); /* a full chart line drawing in */
+  --motion-shimmer: 1400ms; /* skeleton sweep period */
+  --motion-pulse: 2400ms; /* status breath period */
+}
+
+/* The single switch. Collapsing the scale neutralises every transition in the
+   app at once; the keyframe blocks below simply never match. */
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --dur-instant: 0.01ms;
+    --dur-fast: 0.01ms;
+    --dur-base: 0.01ms;
+    --dur-slow: 0.01ms;
+    --motion-travel: 0px;
+    --motion-lift: 0px;
+    --motion-stagger: 0ms;
+    --motion-draw: 0.01ms;
+  }
+}
+
+/* --------------------------------------------------------------------------
+   Keyframes
+
+   Declared unconditionally so the definitions stay in one place; every rule
+   that *uses* one is guarded below.
+   -------------------------------------------------------------------------- */
+
+@keyframes cd-fade-in {
+  from {
+    opacity: 0;
+  }
+}
+
+/* A view swapping for another: a cross-fade with just enough travel to say
+   which direction the content came from. */
+@keyframes cd-view-in {
+  from {
+    opacity: 0;
+    transform: translateY(var(--motion-travel));
+  }
+}
+
+/* A dialog panel rising off the plane the backdrop just dimmed. */
+@keyframes cd-panel-rise {
+  from {
+    opacity: 0;
+    transform: translateY(var(--motion-lift));
+  }
+}
+
+/* The palette is summoned rather than opened, so it scales up from just under
+   full size instead of travelling in from an edge. */
+@keyframes cd-palette-in {
+  from {
+    opacity: 0;
+    transform: scale(0.97) translateY(calc(var(--motion-travel) * -1));
+  }
+}
+
+/* One result row. The cascade comes from the per-row delay, not from here. */
+@keyframes cd-row-in {
+  from {
+    opacity: 0;
+    transform: translateY(calc(var(--motion-travel) * -1));
+  }
+}
+
+/* Chart lines draw themselves on. `pathLength="1"` on the path normalises the
+   geometry, so one dash of length 1 covers any path at any width and no
+   measurement has to cross into JS. */
+@keyframes cd-draw {
+  from {
+    stroke-dasharray: 1;
+    stroke-dashoffset: 1;
+  }
+  to {
+    stroke-dasharray: 1;
+    stroke-dashoffset: 0;
+  }
+}
+
+/* A bar arriving grows from its own baseline. Clipping rather than scaling
+   keeps the rounded data end the right shape the whole way across. */
+@keyframes cd-bar-grow {
+  from {
+    clip-path: inset(0 100% 0 0);
+  }
+  to {
+    clip-path: inset(0 0 0 0);
+  }
+}
+
+/* The status breath. Opacity only: no size change, no colour change, nothing
+   that could be mistaken for the value itself moving. */
+@keyframes cd-pulse {
+  0% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.45;
+  }
+  100% {
+    opacity: 1;
+  }
+}
+
+/* Loading sweep. Travels left to right once per period, never reverses. */
+@keyframes cd-shimmer {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(100%);
+  }
+}
+
+/* --------------------------------------------------------------------------
+   Transitions
+
+   These are built on the duration tokens, so they need no media guard: under
+   reduce the tokens are already 0.01ms and the change lands immediately.
+   -------------------------------------------------------------------------- */
+
+/* Chrome that reacts to the pointer. The exit curve is the resting state, so
+   the hover-off is the one that eases away; hover-on is handled per-rule where
+   it deserves to feel quicker. */
+.cd-nav-item,
+.cd-chip,
+.cd-search-btn,
+.cd-palette-item,
+.cd-chart-toggle,
+.cd-stat--action,
+.cd-acct-row,
+.cd-table tbody tr {
+  transition:
+    background-color var(--dur-fast) var(--ease-exit),
+    border-color var(--dur-fast) var(--ease-exit),
+    color var(--dur-fast) var(--ease-exit),
+    box-shadow var(--dur-fast) var(--ease-exit),
+    transform var(--dur-instant) var(--ease-confirm);
+}
+
+/* The collapse chevron is rotated by an inline transform in Sidebar, and that
+   rotation is the only thing that says which way the panel is about to go. It
+   needs the slower entrance curve, so the whole list is restated rather than
+   letting a bare `transform` rule drop this button's colour transitions. */
+.cd-sidebar-foot .cd-btn {
+  transition:
+    background-color var(--dur-fast) var(--ease-exit),
+    color var(--dur-fast) var(--ease-exit),
+    transform var(--dur-base) var(--ease-entrance);
+}
+
+/* Skip link: enters on focus, leaves when focus moves on. */
+.cd-skip {
+  transition: transform var(--dur-fast) var(--ease-exit);
+}
+
+.cd-skip:focus-visible {
+  transition-timing-function: var(--ease-entrance);
+}
+
+/* Turning a switch on is a commitment, so the knob overshoots a little and
+   settles; turning it off just recedes. */
+.cd-toggle[aria-checked='true'] .cd-toggle-knob {
+  transition-timing-function: var(--ease-confirm);
+}
+
+/* --------------------------------------------------------------------------
+   Micro-feedback
+   -------------------------------------------------------------------------- */
+
+@media (prefers-reduced-motion: no-preference) {
+  /* The press is the acknowledgement. It travels down on the exit curve and
+     releases on the confirm curve, so the release is the part you feel. */
+  .cd-btn:active:not(:disabled),
+  .cd-chip:active,
+  .cd-search-btn:active,
+  .cd-stat--action:active {
+    transform: scale(0.975);
+    transition-duration: var(--dur-instant);
+    transition-timing-function: var(--ease-exit);
+  }
+
+  .cd-toggle:active:not(:disabled) .cd-toggle-track {
+    transform: scale(0.96);
+  }
+}
+
+/* --------------------------------------------------------------------------
+   Entrances
+   -------------------------------------------------------------------------- */
+
+@media (prefers-reduced-motion: no-preference) {
+  /* Routed view. Keyed on the view id in App, so it replays on every swap. */
+  .cd-view-enter {
+    animation: cd-view-in var(--dur-base) var(--ease-entrance) both;
+  }
+
+  /* Backdrop first, then the panel it dims the plane for. */
+  .cd-overlay {
+    animation: cd-fade-in var(--dur-fast) var(--ease-entrance) both;
+  }
+
+  .cd-modal {
+    animation: cd-panel-rise var(--dur-base) var(--ease-entrance) both;
+  }
+
+  .cd-palette {
+    transform-origin: 50% 0;
+    animation: cd-palette-in var(--dur-base) var(--ease-entrance) both;
+  }
+
+  /* The cascade. `--cd-row` is the row's index, already capped and already
+     zeroed for reduced motion by the palette itself. */
+  .cd-palette-item {
+    animation: cd-row-in var(--dur-fast) var(--ease-entrance) both;
+    animation-delay: calc(var(--cd-row, 0) * var(--motion-stagger));
+  }
+
+  /* An empty state is a conclusion, not a layout element — it earns a fade. */
+  .cd-empty,
+  .cd-chart-empty {
+    animation: cd-fade-in var(--dur-base) var(--ease-entrance) both;
+  }
+}
+
+/* --------------------------------------------------------------------------
+   Data marks
+
+   The only motion in a plot area. It runs on mount and on a value change, and
+   never on a hover, a crosshair move or a re-render.
+   -------------------------------------------------------------------------- */
+
+@media (prefers-reduced-motion: no-preference) {
+  /* Draw-in. The timeline gets the long draw because it spans the card; a
+     sparkline is 84px wide and would look like a stutter at that length. */
+  .cd-series-line {
+    animation: cd-draw var(--motion-draw) var(--ease-entrance) both;
+  }
+
+  .cd-spark-line {
+    animation: cd-draw var(--dur-slow) var(--ease-entrance) both;
+  }
+
+  /* The wash belongs to the line, so it arrives with it rather than sitting
+     under a half-drawn stroke. */
+  .cd-spark-area {
+    animation: cd-fade-in var(--dur-slow) var(--ease-entrance) both;
+  }
+
+  .cd-meter-fill,
+  .cd-burn-fill {
+    animation: cd-bar-grow var(--dur-slow) var(--ease-entrance) both;
+  }
+}
+
+/* Growth on a value change. A bar that slides out to a new width is the whole
+   point: it says the number went up, in a way a redrawn bar cannot. */
+.cd-burn-fill {
+  transition: width var(--dur-slow) var(--ease-entrance);
+}
+
+/* --------------------------------------------------------------------------
+   Status pulse
+
+   Scoped to the status glyph and nothing else. A pulsing row, card or bar
+   would be an alarm; a breathing 12px glyph is a note. It runs on the three
+   states that are actually asking for attention, and never on `good`,
+   `neutral`, or on any of the static chrome badges.
+   -------------------------------------------------------------------------- */
+
+@media (prefers-reduced-motion: no-preference) {
+  .cd-pulse,
+  .cd-meter-state[data-status='warning'] svg,
+  .cd-meter-state[data-status='serious'] svg,
+  .cd-meter-state[data-status='critical'] svg,
+  .cd-stat-state[data-status='warning'] svg,
+  .cd-stat-state[data-status='serious'] svg,
+  .cd-stat-state[data-status='critical'] svg {
+    animation: cd-pulse var(--motion-pulse) var(--ease-entrance) infinite;
+  }
+}
+
+/* --------------------------------------------------------------------------
+   Loading skeleton
+
+   Stands in for content that has a known shape. Where the shape is unknown,
+   the busy spinner is still the honest answer.
+   -------------------------------------------------------------------------- */
+
+.cd-skeleton {
+  position: relative;
+  overflow: hidden;
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  box-shadow: inset 0 0 0 1px var(--grid);
+}
+
+.cd-skeleton::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(
+    90deg,
+    transparent,
+    color-mix(in srgb, var(--text-primary) 7%, transparent),
+    transparent
+  );
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .cd-skeleton::after {
+    animation: cd-shimmer var(--motion-shimmer) linear infinite;
+  }
+}
+
+.cd-skeleton--head {
+  width: 34%;
+  height: 20px;
+}
+
+.cd-skeleton--line {
+  width: 100%;
+  height: 12px;
+}
+
+.cd-skeleton--block {
+  width: 100%;
+  height: 96px;
+  border-radius: var(--radius-lg);
+}
+
+/* The routed-view placeholder: the shape of a view head over a card, sized to
+   the same column the real view will land in, so nothing jumps on swap. */
+.cd-view-skeleton {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  max-width: 1180px;
+  margin: 0 auto;
+}

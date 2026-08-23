@@ -1,0 +1,76 @@
+name: Feature request
+description: Suggest something ClaudeDeck should do that it does not do today.
+title: "feat: "
+labels: ["enhancement", "needs triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Two constraints shape what can be accepted, so they are worth knowing
+        before you write:
+
+        - **Zero runtime dependencies.** ClaudeDeck ships no npm packages at
+          runtime. A feature that can only exist on top of a library is a much
+          harder sell than one that can be written by hand.
+        - **It never automates a login.** ClaudeDeck reads and writes the files
+          Claude Code already wrote. It does not drive a browser, script a
+          sign-in, or hold a password.
+
+        A request that crosses either line usually gets closed rather than
+        argued with. That is not a judgement on the idea, only on where it fits.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What are you trying to do, and where does ClaudeDeck get in the way? Describe the situation rather than the solution.
+      placeholder: |
+        I keep one account for client work and one for my own projects, and I
+        have to remember which one is active before I start Claude Code in a
+        folder. I usually remember after the wrong one has burned 20%.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you would like it to do
+      description: The change as you picture it. A rough sketch of the screen or the command line helps more than a paragraph.
+      placeholder: |
+        claudedeck switch --for .
+        ...looks up the directory mapping for the current folder and activates
+        the slot bound to it.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Which part of the app?
+      options:
+        - Dashboard and quota display
+        - Accounts (add, alias, reorder, switch)
+        - Timeline, history, and forecasting
+        - Automation and auto-switch rules
+        - Settings
+        - Tray and notifications
+        - CLI
+        - Packaging, install, or updates
+        - Something else
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: What you tried instead
+      description: An existing setting, a shell alias, another tool. Say why it was not enough.
+
+  - type: checkboxes
+    id: fit
+    attributes:
+      label: Fit
+      options:
+        - label: This can be built without adding a runtime dependency, or I have explained above why it cannot.
+        - label: This does not ask ClaudeDeck to automate a Claude sign-in.
+        - label: I would be willing to open a pull request for it.

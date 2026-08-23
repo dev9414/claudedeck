@@ -1,0 +1,67 @@
+# ClaudeDeck has zero runtime dependencies by design, so everything Dependabot
+# can see here is a dev or CI dependency. Grouping keeps that from turning into
+# a dozen near-identical pull requests every Monday.
+
+version: 2
+
+updates:
+  - package-ecosystem: npm
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Etc/UTC
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+    commit-message:
+      prefix: "chore(deps)"
+      prefix-development: "chore(deps-dev)"
+    groups:
+      # Electron and its packager move together; splitting them produces PRs
+      # that cannot be evaluated on their own.
+      electron:
+        patterns:
+          - electron
+          - electron-*
+          - "@electron/*"
+      react:
+        patterns:
+          - react
+          - react-dom
+          - "@types/react"
+          - "@types/react-dom"
+      tooling:
+        patterns:
+          - typescript
+          - vite
+          - vitest
+          - "@vitejs/*"
+          - "@vitest/*"
+          - "@testing-library/*"
+          - jsdom
+          - "@types/node"
+    ignore:
+      # Electron majors carry breaking main-process API changes and a Chromium
+      # bump; they get a deliberate upgrade, never an automatic one.
+      - dependency-name: electron
+        update-types: [version-update:semver-major]
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Etc/UTC
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+      - ci
+    commit-message:
+      prefix: "chore(ci)"
+    groups:
+      actions:
+        patterns:
+          - "*"

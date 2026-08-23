@@ -1,0 +1,679 @@
+/*
+ * Chart-kit styles.
+ *
+ * Every colour here resolves through a token from tokens.css — there is not a
+ * literal colour in this file, and --accent never appears, because the accent
+ * is chrome and must never read as data. Series colours arrive from the
+ * components as inline `var(--series-N)` references; the rules below only shape
+ * marks, spacing and the recessive grid.
+ */
+
+/* --------------------------------------------------------------------------
+   Frame
+   -------------------------------------------------------------------------- */
+
+.cd-chart {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  margin: 0;
+  padding: var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface-1);
+}
+
+.cd-chart-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.cd-chart-heading {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.cd-chart-title {
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: -0.005em;
+}
+
+.cd-chart-sub {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.cd-chart-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex: none;
+}
+
+.cd-chart-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  height: 24px;
+  padding: 0 var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.cd-chart-toggle:hover {
+  border-color: var(--border-strong);
+  color: var(--text-primary);
+}
+
+.cd-chart-toggle[aria-pressed='true'] {
+  background: var(--surface-raised);
+  color: var(--text-primary);
+}
+
+.cd-chart-plot {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.cd-chart-plot[hidden],
+.cd-chart [hidden] {
+  display: none;
+}
+
+.cd-chart-surface {
+  position: relative;
+  min-width: 0;
+}
+
+.cd-chart-table-wrap {
+  overflow-x: auto;
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.cd-chart-fallback {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-2);
+  margin-top: var(--space-1);
+}
+
+/* --------------------------------------------------------------------------
+   Legend
+   -------------------------------------------------------------------------- */
+
+.cd-chart-legend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1) var(--space-4);
+  margin: 0;
+  padding: 0;
+}
+
+.cd-chart-legend--plot {
+  padding-bottom: var(--space-1);
+}
+
+.cd-chart-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  font-size: 12px;
+}
+
+.cd-chart-legend-label {
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 22ch;
+}
+
+.cd-chart-legend-sub {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+/* The swatch inherits `color` from an inline token reference, so the mark is
+   the only place a series colour is named. */
+.cd-chart-swatch {
+  flex: none;
+  width: 14px;
+  height: 2px;
+  border-radius: 2px;
+  background: currentColor;
+}
+
+.cd-chart-swatch--dashed {
+  background: repeating-linear-gradient(
+    90deg,
+    currentColor 0 5px,
+    transparent 5px 8px
+  );
+}
+
+.cd-chart-swatch--band {
+  height: 10px;
+  border: 1px solid color-mix(in srgb, currentColor 45%, transparent);
+  border-radius: 2px;
+  background: color-mix(in srgb, currentColor 20%, transparent);
+}
+
+/* --------------------------------------------------------------------------
+   Empty state
+   -------------------------------------------------------------------------- */
+
+.cd-chart-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  min-height: 120px;
+  padding: var(--space-5) var(--space-4);
+  border: 1px dashed var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  color: var(--text-muted);
+  text-align: center;
+}
+
+.cd-chart-empty-title {
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.cd-chart-empty-hint {
+  max-width: 44ch;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+/* --------------------------------------------------------------------------
+   Timeline
+   -------------------------------------------------------------------------- */
+
+.cd-timeline {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.cd-timeline-svg {
+  display: block;
+  max-width: 100%;
+  touch-action: none;
+}
+
+.cd-timeline-svg:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+.cd-axis-grid {
+  stroke: var(--grid);
+  stroke-width: 1;
+  shape-rendering: crispEdges;
+}
+
+.cd-axis-line {
+  stroke: var(--axis);
+  stroke-width: 1;
+  shape-rendering: crispEdges;
+}
+
+.cd-axis-label {
+  fill: var(--text-muted);
+  font-family: var(--font-sans);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* The one annotation everything is measured against. It is a hairline so it
+   never competes with a series, and it always carries the word "limit". */
+.cd-limit-line {
+  stroke: var(--status-critical);
+  stroke-width: 1;
+}
+
+.cd-limit-label {
+  fill: var(--text-secondary);
+  font-family: var(--font-sans);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+}
+
+.cd-series-line {
+  fill: none;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.cd-series-dot {
+  stroke: var(--surface-1);
+  stroke-width: 2;
+}
+
+.cd-projection {
+  stroke-width: 2;
+  stroke-dasharray: 5 4;
+  stroke-linecap: round;
+}
+
+.cd-cone {
+  stroke: none;
+}
+
+.cd-crosshair line {
+  stroke: var(--axis);
+  stroke-width: 1;
+  stroke-dasharray: 3 3;
+}
+
+/* 8px across, with a surface-coloured ring so overlapping markers stay
+   countable. */
+.cd-crosshair-marker {
+  stroke: var(--surface-1);
+  stroke-width: 2;
+}
+
+.cd-direct-dot {
+  stroke: none;
+}
+
+.cd-direct-label {
+  fill: var(--text-secondary);
+  font-family: var(--font-sans);
+  font-size: 11px;
+}
+
+/* --------------------------------------------------------------------------
+   Tooltip
+   -------------------------------------------------------------------------- */
+
+.cd-chart-tooltip {
+  position: absolute;
+  top: var(--space-2);
+  z-index: 5;
+  min-width: 150px;
+  max-width: 260px;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow);
+  pointer-events: none;
+}
+
+.cd-chart-tooltip-head {
+  margin-bottom: var(--space-1);
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.cd-chart-tooltip-list {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.cd-chart-tooltip-list li {
+  display: grid;
+  grid-template-columns: 14px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: 12px;
+}
+
+.cd-chart-tooltip-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-primary);
+}
+
+.cd-chart-tooltip-value {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.cd-chart-tooltip-foot {
+  margin-top: var(--space-1);
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+/* --------------------------------------------------------------------------
+   Status mapping
+   -------------------------------------------------------------------------- */
+
+.cd-meter-fill,
+.cd-meter-state,
+.cd-stat,
+.cd-stat-state {
+  --cd-state: var(--status-neutral);
+}
+
+.cd-meter-fill[data-status='good'],
+.cd-meter-state[data-status='good'],
+.cd-stat[data-status='good'],
+.cd-stat-state[data-status='good'] {
+  --cd-state: var(--status-good);
+}
+
+.cd-meter-fill[data-status='warning'],
+.cd-meter-state[data-status='warning'],
+.cd-stat[data-status='warning'],
+.cd-stat-state[data-status='warning'] {
+  --cd-state: var(--status-warning);
+}
+
+.cd-meter-fill[data-status='serious'],
+.cd-meter-state[data-status='serious'],
+.cd-stat[data-status='serious'],
+.cd-stat-state[data-status='serious'] {
+  --cd-state: var(--status-serious);
+}
+
+.cd-meter-fill[data-status='critical'],
+.cd-meter-state[data-status='critical'],
+.cd-stat[data-status='critical'],
+.cd-stat-state[data-status='critical'] {
+  --cd-state: var(--status-critical);
+}
+
+/* The status hue is darkened against the ink so the *text* clears contrast
+   even where the raw swatch does not. The glyph and the word carry the state;
+   this colour only agrees with them. */
+.cd-meter-state,
+.cd-stat-state {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  color: color-mix(in srgb, var(--cd-state) 62%, var(--text-primary));
+  font-size: 11px;
+  letter-spacing: 0.01em;
+}
+
+/* --------------------------------------------------------------------------
+   Usage meter
+   -------------------------------------------------------------------------- */
+
+.cd-meter {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.cd-meter-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.cd-meter-row {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+
+.cd-meter-top {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.cd-meter-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-primary);
+  font-size: 13px;
+}
+
+.cd-meter-value {
+  flex: none;
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.cd-meter-track {
+  position: relative;
+  width: 100%;
+  height: 8px;
+  border-radius: 2px;
+  background: var(--surface-2);
+  box-shadow: inset 0 0 0 1px var(--grid);
+  overflow: hidden;
+}
+
+/* Anchored to the zero baseline, with the rounded end on the data side only. */
+.cd-meter-fill {
+  height: 100%;
+  border-radius: 2px var(--radius-sm) var(--radius-sm) 2px;
+  background: var(--cd-state);
+  /* Growth is the message: a bar that slides out to a new width says the
+     number went up. Mount growth and the reduced-motion guard: motion.css. */
+  transition: width var(--dur-slow) var(--ease-entrance);
+}
+
+.cd-meter-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.cd-meter-reset {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  color: var(--text-muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Compact keeps the glyph and the word — only the countdown is dropped. */
+.cd-meter--compact .cd-meter-list {
+  gap: var(--space-2);
+}
+
+.cd-meter--compact .cd-meter-track {
+  height: 6px;
+}
+
+.cd-meter--compact .cd-meter-reset {
+  display: none;
+}
+
+.cd-meter--compact .cd-meter-label,
+.cd-meter--compact .cd-meter-value {
+  font-size: 12px;
+}
+
+/* --------------------------------------------------------------------------
+   Burn rate bars
+   -------------------------------------------------------------------------- */
+
+.cd-burn {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.cd-burn-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.cd-burn-row {
+  display: grid;
+  grid-template-columns: minmax(72px, 20%) minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.cd-burn-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-primary);
+  font-size: 12px;
+}
+
+.cd-burn-track {
+  display: block;
+  width: 100%;
+  height: 10px;
+  border-radius: 2px;
+  background: var(--surface-2);
+  box-shadow: inset 0 0 0 1px var(--grid);
+  overflow: hidden;
+}
+
+.cd-burn-fill {
+  display: block;
+  height: 100%;
+  border-radius: 2px var(--radius-sm) var(--radius-sm) 2px;
+}
+
+.cd-burn-value {
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.cd-burn-flag {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+  color: var(--text-muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.cd-burn-foot {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+@media (max-width: 520px) {
+  .cd-burn-row {
+    grid-template-columns: minmax(56px, 28%) minmax(0, 1fr) auto;
+  }
+
+  .cd-burn-flag {
+    grid-column: 2 / -1;
+  }
+}
+
+/* --------------------------------------------------------------------------
+   Stat tile
+   -------------------------------------------------------------------------- */
+
+.cd-stat {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-1);
+  text-align: left;
+  min-width: 0;
+}
+
+.cd-stat[data-status='warning'],
+.cd-stat[data-status='serious'],
+.cd-stat[data-status='critical'] {
+  border-color: color-mix(in srgb, var(--cd-state) 40%, var(--border));
+}
+
+.cd-stat--action:hover {
+  border-color: var(--border-strong);
+  background: var(--surface-raised);
+}
+
+.cd-stat-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.cd-stat-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.cd-stat-value {
+  color: var(--text-primary);
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  line-height: 1.2;
+}
+
+.cd-stat-sub {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.cd-stat-spark {
+  margin-top: var(--space-1);
+}
+
+/* --------------------------------------------------------------------------
+   Sparkline
+   -------------------------------------------------------------------------- */
+
+.cd-spark {
+  display: block;
+  overflow: visible;
+}
+
+.cd-spark-line {
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+}
+
+.cd-spark-end {
+  stroke: none;
+}
+
+.cd-spark--empty line {
+  stroke: var(--grid);
+  stroke-width: 2;
+  stroke-linecap: round;
+}

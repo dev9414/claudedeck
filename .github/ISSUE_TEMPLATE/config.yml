@@ -1,0 +1,20 @@
+# Blank issues are off: both forms carry the "never paste a token" warning, and
+# an empty issue box is exactly where someone pastes a credentials file.
+blank_issues_enabled: false
+
+contact_links:
+  - name: Report a security problem privately
+    url: https://github.com/dev9414/claudedeck/security/advisories/new
+    about: Anything involving a leaked, mishandled, or exposed credential. Never open a public issue for this.
+
+  - name: Ask a question or share a setup
+    url: https://github.com/dev9414/claudedeck/discussions
+    about: Usage questions, rotation strategies, and "is this supposed to happen?" - before it is a bug.
+
+  - name: Read the docs first
+    url: https://github.com/dev9414/claudedeck#readme
+    about: The README covers switching, auto-switch, safe mode, and where ClaudeDeck stores its data.
+
+  - name: Claude Code itself is broken
+    url: https://github.com/anthropics/claude-code/issues
+    about: Quota, billing, and Claude Code CLI bugs belong upstream - ClaudeDeck only reads the files it writes.

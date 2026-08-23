@@ -1,0 +1,379 @@
+/*
+ * View-level layout for Dashboard, Accounts, and Timeline.
+ *
+ * Only tokens from tokens.css appear here — no literal colors. Everything in
+ * this file is chrome: spacing, borders, and surfaces. Chart marks are owned by
+ * the chart components, and --accent never crosses into a plot area, so the
+ * only accent usage below is on interactive chrome (segmented controls, the
+ * active-account rail) that sits outside any chart.
+ */
+
+/* --------------------------------------------------------------------------
+   Shared view furniture
+   -------------------------------------------------------------------------- */
+
+/* A recoverable failure that must not replace the whole view: the icon and the
+   word "Error"/"Warning" carry the meaning, the tint only reinforces it. */
+.cd-note {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.cd-note--error {
+  border-color: color-mix(in srgb, var(--status-critical) 40%, var(--border));
+  background: color-mix(in srgb, var(--status-critical) 8%, var(--surface-1));
+}
+
+.cd-note--warning {
+  border-color: color-mix(in srgb, var(--status-warning) 45%, var(--border));
+  background: color-mix(in srgb, var(--status-warning) 10%, var(--surface-1));
+}
+
+.cd-note-title {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.cd-note-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.cd-note .cd-icon {
+  margin-top: 1px;
+}
+
+/* Segmented control: a row of buttons where exactly one is pressed. The
+   pressed state is announced with aria-pressed, so the fill is redundant. */
+.cd-seg {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  padding: 3px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+}
+
+.cd-seg .cd-btn {
+  border-color: transparent;
+  background: transparent;
+}
+
+.cd-seg .cd-btn[aria-pressed='true'] {
+  border-color: var(--border);
+  background: var(--surface-raised);
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.cd-field {
+  display: inline-flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  font-size: 12px;
+}
+
+.cd-field > span {
+  color: var(--text-secondary);
+}
+
+.cd-select,
+.cd-input {
+  height: 30px;
+  min-width: 0;
+  padding: 0 var(--space-2);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface-raised);
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: 13px;
+}
+
+.cd-select:disabled,
+.cd-input:disabled {
+  color: var(--text-muted);
+  cursor: not-allowed;
+}
+
+/* Key/value pairs in confirmation dialogs. */
+.cd-kv {
+  display: grid;
+  grid-template-columns: minmax(96px, auto) minmax(0, 1fr);
+  gap: var(--space-1) var(--space-3);
+  margin: 0;
+  font-size: 13px;
+}
+
+.cd-kv dt {
+  color: var(--text-secondary);
+}
+
+.cd-kv dd {
+  margin: 0;
+  color: var(--text-primary);
+}
+
+/* The planned-write manifest. Deliberately verbatim and monospaced: this is
+   the list of files the app is about to touch. */
+.cd-writes {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  list-style: none;
+}
+
+.cd-writes li {
+  overflow-wrap: anywhere;
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.cd-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1) var(--space-3);
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.cd-meta-sep {
+  color: var(--text-muted);
+}
+
+/* --------------------------------------------------------------------------
+   Dashboard
+   -------------------------------------------------------------------------- */
+
+.cd-tiles {
+  --cd-min-col: 208px;
+}
+
+.cd-dash-split {
+  display: grid;
+  grid-template-columns: minmax(0, 3fr) minmax(280px, 2fr);
+  gap: var(--space-4);
+  align-items: start;
+}
+
+@media (max-width: 900px) {
+  .cd-dash-split {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.cd-switch-strategies {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.cd-switch-foot {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.cd-window-note {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+/* --------------------------------------------------------------------------
+   Accounts
+   -------------------------------------------------------------------------- */
+
+.cd-acct-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.cd-acct-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: var(--space-2) var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface-1);
+}
+
+/* The active row gets a chrome rail, not a chart color. */
+.cd-acct-row[data-active='true'] {
+  border-left-color: var(--accent);
+  background: var(--surface-raised);
+}
+
+.cd-acct-row[data-dimmed='true'] .cd-acct-identity {
+  color: var(--text-secondary);
+}
+
+.cd-acct-row[data-dragging='true'] {
+  opacity: 0.55;
+}
+
+.cd-acct-row[data-droptarget='true'] {
+  border-color: var(--focus-ring);
+  border-left-color: var(--focus-ring);
+}
+
+.cd-acct-grip {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-1);
+  padding-top: 2px;
+  color: var(--text-muted);
+  cursor: grab;
+}
+
+.cd-acct-grip:active {
+  cursor: grabbing;
+}
+
+/* Two rules stacked read as a grab handle without needing a dedicated glyph. */
+.cd-acct-gripmark {
+  display: flex;
+  flex-direction: column;
+  line-height: 0;
+}
+
+.cd-acct-gripmark .cd-icon + .cd-icon {
+  margin-top: -8px;
+}
+
+.cd-acct-slot {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.cd-acct-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.cd-acct-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
+}
+
+.cd-acct-identity {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.cd-acct-email {
+  overflow: hidden;
+  font-size: 14px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cd-acct-alias {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.cd-acct-badges {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.cd-acct-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.cd-alias-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.cd-alias-form .cd-input {
+  width: 160px;
+}
+
+/* --------------------------------------------------------------------------
+   Timeline
+   -------------------------------------------------------------------------- */
+
+.cd-tl-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--space-3);
+}
+
+.cd-tl-split {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(260px, 1fr);
+  gap: var(--space-4);
+  align-items: start;
+}
+
+@media (max-width: 1000px) {
+  .cd-tl-split {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.cd-forecast-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 12px;
+}
+
+.cd-forecast-list li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-1) var(--space-2);
+  color: var(--text-secondary);
+}
+
+.cd-forecast-list strong {
+  color: var(--text-primary);
+  font-weight: 600;
+}
