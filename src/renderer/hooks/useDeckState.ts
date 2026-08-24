@@ -25,6 +25,7 @@ import type {
   UsageWindow,
 } from '@shared/types';
 import { err, ok } from '@shared/types';
+import { DEFAULT_SCHEDULE } from '@core/schedule';
 
 const NO_BRIDGE = 'No main-process bridge: ClaudeDeck is showing stub data.';
 const HOUR = 60 * 60 * 1000;
@@ -59,6 +60,16 @@ function stubSettings(): Settings {
     historyRetentionDays: 30,
     safeMode: false,
     directoryMappings: [],
+    planner: {
+      enabled: false,
+      configured: false,
+      schedules: [DEFAULT_SCHEDULE],
+      peakWeight: 3,
+      remind: true,
+      remindLeadMin: 10,
+      autoAnchor: false,
+      anchorPrompt: 'hi',
+    },
   };
 }
 
@@ -347,6 +358,22 @@ function createStubApi(): DeckApi {
         aheadOfPace: w.pct > 55,
       }));
     },
+
+    // The planner needs a real day of history to say anything useful, which a
+    // browser-only stub does not have. Refusing is the honest answer; inventing
+    // a schedule here would put a confident-looking plan on screen with nothing
+    // behind it.
+    getSessionPlan: async () => err('the planner needs the desktop app; this window has no bridge'),
+
+    getUsageProfile: async () => err('no usage history without the desktop app'),
+
+    getAnchors: async () => [],
+
+    anchorNow: async (slot: number) => ({
+      ok: false,
+      slot,
+      error: 'anchoring runs the Claude Code CLI, which needs the desktop app',
+    }),
 
     getSettings: async () => state.settings,
 

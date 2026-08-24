@@ -9,15 +9,19 @@
 
 import type {
   Account,
+  AnchorObservation,
+  AnchorResult,
   AutoSwitchEvent,
   DeckState,
   DirectoryMapping,
   Forecast,
   HistoryPoint,
   Result,
+  SessionPlan,
   Settings,
   SwitchRequest,
   SwitchResult,
+  UsageProfile,
 } from './types';
 
 export interface AddAccountOptions {
@@ -69,6 +73,19 @@ export interface DeckApi {
   getHistory(query: HistoryQuery): Promise<HistoryPoint[]>;
   getForecasts(slot: number): Promise<Forecast[]>;
 
+  // --- session window planning ------------------------------------------
+  /** The plan for a local day (`YYYY-MM-DD`); today when omitted. */
+  getSessionPlan(day?: string): Promise<Result<SessionPlan>>;
+  /** The learned hourly usage profile, for the planner's own charts. */
+  getUsageProfile(slot?: number): Promise<Result<UsageProfile>>;
+  /** The 5-hour anchors currently observed per account. */
+  getAnchors(): Promise<AnchorObservation[]>;
+  /**
+   * Place a 5-hour anchor now by running the Claude Code CLI with a throwaway
+   * prompt. Spends a little of that account's own quota — always explicit.
+   */
+  anchorNow(slot: number): Promise<AnchorResult>;
+
   // --- settings ----------------------------------------------------------
   getSettings(): Promise<Settings>;
   updateSettings(patch: Partial<Settings>): Promise<Result<Settings>>;
@@ -107,6 +124,10 @@ export const INVOKE_CHANNELS = [
   'stopAutoSwitch',
   'getHistory',
   'getForecasts',
+  'getSessionPlan',
+  'getUsageProfile',
+  'getAnchors',
+  'anchorNow',
   'getSettings',
   'updateSettings',
   'mapDirectory',

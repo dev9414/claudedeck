@@ -40,6 +40,8 @@ const RESULT_CHANNELS = new Set<InvokeChannel>([
   'moveAccount',
   'startAutoSwitch',
   'stopAutoSwitch',
+  'getSessionPlan',
+  'getUsageProfile',
   'updateSettings',
   'mapDirectory',
   'unmapDirectory',
@@ -99,6 +101,20 @@ export function registerIpc(deps: IpcDeps): () => void {
     // --- history + forecasting --------------------------------------------
     getHistory: async ([query]) => services.getHistory(historyQuery(query)),
     getForecasts: async ([slot]) => services.getForecasts(requireNumber(slot, 'slot')),
+
+    // --- session window planning ------------------------------------------
+    // The day is left as a plain string here; `services` owns deciding what a
+    // calendar day is, and duplicating that test would let the two disagree.
+    getSessionPlan: async ([day]) => services.getSessionPlan(optionalString(day, 'day')),
+
+    getUsageProfile: async ([slot]) => services.getUsageProfile(optionalNumber(slot, 'slot')),
+
+    getAnchors: async () => services.getAnchors(),
+
+    // Deliberately not a `Result` channel: `AnchorResult` carries its own `ok`
+    // and the slot it refers to, and collapsing it into an `Err` would drop the
+    // slot the renderer needs to label the failure with.
+    anchorNow: async ([slot]) => services.anchorNow(requireNumber(slot, 'slot')),
 
     // --- settings ----------------------------------------------------------
     getSettings: async () => services.getSettings(),

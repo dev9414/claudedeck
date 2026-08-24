@@ -19,6 +19,8 @@
 
 import type {
   Account,
+  AnchorObservation,
+  AnchorResult,
   AutoSwitchEvent,
   ClaudePaths,
   DeckState,
@@ -28,16 +30,22 @@ import type {
   HistoryPoint,
   PlatformKind,
   Result,
+  SessionPlan,
   Settings,
   SwitchRequest,
   SwitchResult,
+  UsageProfile,
   UsageSnapshot,
   UsageWindow,
+  Weekday,
+  WorkSchedule,
 } from '@shared/types';
 import { err, ok } from '@shared/types';
 import type { HistoryQuery } from '@shared/ipc';
 import type { AppServices } from './services';
 import { defaultSettings } from './settings';
+import { localDayStart } from '@core/schedule';
+import { planDay } from '@core/planner';
 
 /** Frozen "now" so generated history and reset times never drift. */
 export const DEMO_NOW = Date.UTC(2026, 7, 24, 14, 30, 0);
@@ -45,8 +53,19 @@ export const DEMO_NOW = Date.UTC(2026, 7, 24, 14, 30, 0);
 /** Ten days of history at a 20-minute cadence. */
 const HISTORY_DAYS = 10;
 const HISTORY_STEP_MS = 20 * 60 * 1000;
+const MINUTE_MS = 60 * 1000;
 const FIVE_HOUR_MS = 5 * 60 * 60 * 1000;
 const SEVEN_DAY_MS = 7 * 24 * 60 * 60 * 1000;
+
+/**
+ * Minutes each slot's 5-hour window is offset from the one before it.
+ *
+ * Real accounts are anchored by whenever they were last used first, so they
+ * never share a boundary — and the planner's whole subject is that offset. A
+ * demo where every window resets at the same instant would show the one thing
+ * the feature exists to talk about as if it did not exist.
+ */
+const DEMO_ANCHOR_SKEW_MIN = 80;
 
 const DEMO_CODE = 'demo-mode';
 const DEMO_REFUSAL = 'ClaudeDeck is in demo mode — no credential is ever read or written';
@@ -142,7 +161,8 @@ function window_(key: string, label: string, pct: number, resetsAt: number): Usa
 
 function snapshotFor(seed: DemoSeed, now: number): UsageSnapshot | undefined {
   if (seed.state === 'api-key' || seed.state === 'quarantined') return undefined;
-  const fiveHourReset = now - (now % FIVE_HOUR_MS) + FIVE_HOUR_MS;
+  const fiveHourReset =
+    now - (now % FIVE_HOUR_MS) + FIVE_HOUR_MS + (seed.slot - 1) * DEMO_ANCHOR_SKEW_MIN * MINUTE_MS;
   const sevenDayReset = now - (now % SEVEN_DAY_MS) + SEVEN_DAY_MS;
   const snapshot: UsageSnapshot = {
     fiveHour: window_('5h', '5-hour', seed.fiveHour, fiveHourReset),
@@ -307,6 +327,99 @@ function forecastFor(points: readonly HistoryPoint[], key: string, now: number, 
 }
 
 // ---------------------------------------------------------------------------
+// Session planning (inline, for the same reason as the forecasts above)
+// ---------------------------------------------------------------------------
+
+
+/**
+ * Utilization points the whole demo fleet burns in each local hour.
+ *
+ * A morning ramp, a heavy late morning, a lighter afternoon and a quiet night —
+ * the shape someone's day actually has, and the shape that makes an anchor
+ * recommendation mean something. Written down rather than generated: a planner
+ * screenshot has to be the same one every time.
+ */
+const DEMO_HOURLY: readonly number[] = [
+  0, 0, 0, 0, 0, 0, 0.8, 3.4, 18.2, 44.2, 58.6, 61.4, 48.3, 26.3, 22.7, 25.4, 18.6, 11.2, 5.8, 3.1,
+  1.4, 0.6, 0.2, 0,
+];
+
+/** Three polls an hour, across the weekdays of the ten days of demo history. */
+const DEMO_SAMPLES_PER_HOUR = 63;
+const DEMO_PROFILE_CONFIDENCE = 0.82;
+const DEMO_WEEKDAYS: readonly Weekday[] = [1, 2, 3, 4, 5];
+
+/**
+ * Where the demo plan puts each account's first message, in minutes from local
+ * midnight. Staggered on purpose: the second account's window has to still be
+ * fresh at the moment the first one runs dry, which is the entire argument for
+ * choosing an anchor at all.
+ */
+
+/** The hours the demo plans against — the app's own defaults, as a real install. */
+const DEMO_SCHEDULE: WorkSchedule = defaultSettings().planner.schedules[0] ?? {
+  label: 'Weekdays',
+  days: [1, 2, 3, 4, 5],
+  work: { start: 9 * 60, end: 18 * 60 },
+  peak: { start: 10 * 60, end: 13 * 60 },
+};
+
+
+
+
+
+
+
+
+
+/** The learned curve, fleet-wide or scaled to one account's share of it. */
+function demoProfile(slot?: number): UsageProfile {
+  const fleet = SEEDS.reduce((sum, seed) => sum + seed.intensity, 0);
+  const seed = slot === undefined ? undefined : SEEDS.find((entry) => entry.slot === slot);
+  const share = seed === undefined ? 1 : fleet > 0 ? seed.intensity / fleet : 0;
+  return {
+    hourly: DEMO_HOURLY.map((value) => round1(value * share)),
+    // One account was observed by one account's polls, so its evidence is
+    // thinner than the fleet's, and the confidence has to say so.
+    samples: DEMO_HOURLY.map(() =>
+      slot === undefined ? DEMO_SAMPLES_PER_HOUR : Math.round(DEMO_SAMPLES_PER_HOUR / SEEDS.length),
+    ),
+    confidence: slot === undefined ? DEMO_PROFILE_CONFIDENCE : round1(DEMO_PROFILE_CONFIDENCE - 0.11),
+    days: [...DEMO_WEEKDAYS],
+  };
+}
+
+/**
+ * Local midnight of the day to plan, or null when the key is not a real day.
+ *
+ * "Local" matters and used to be wrong here. The renderer formats every instant
+ * in the host's timezone, so a demo day laid out at UTC midnight put the anchor
+ * label and the anchor's position a whole UTC offset apart -- the note said
+ * 07:30 while the bullet above it said 13:00 on a +05:30 host. The real service
+ * uses `-getTimezoneOffset()`; this now does the same.
+ */
+function demoDayStart(now: number, day?: string): number | null {
+  if (day === undefined) return localDayStart(now, -new Date(now).getTimezoneOffset());
+
+  const parts = /^(\d{4})-(\d{2})-(\d{2})$/.exec(day.trim());
+  if (!parts || parts[1] === undefined || parts[2] === undefined || parts[3] === undefined) {
+    return null;
+  }
+  const year = Number(parts[1]);
+  const month = Number(parts[2]);
+  const date = Number(parts[3]);
+
+  // Built through the local constructor so the result is local midnight, and
+  // read back because `new Date(2026, 1, 31)` rolls into March rather than
+  // refusing a day that never existed.
+  const at = new Date(year, month - 1, date, 0, 0, 0, 0);
+  if (at.getFullYear() !== year || at.getMonth() !== month - 1 || at.getDate() !== date) {
+    return null;
+  }
+  return at.getTime();
+}
+
+// ---------------------------------------------------------------------------
 // Factory
 // ---------------------------------------------------------------------------
 
@@ -327,6 +440,10 @@ export function createDemoServices(options: DemoOptions = {}): AppServices {
   let settings: Settings = {
     ...defaultSettings(),
     autoswitch: { ...defaultSettings().autoswitch, enabled: true, threshold: 85, models: [MODEL_NAME] },
+    // Presented as an install where the user has already declared their hours:
+    // the planner's own screenshots are of a configured planner, and
+    // `configured` is what stops every surface labelling the plan a guess.
+    planner: { ...defaultSettings().planner, enabled: true, configured: true },
   };
   let autoRunning = true;
 
@@ -478,6 +595,83 @@ export function createDemoServices(options: DemoOptions = {}): AppServices {
         out.push(forecastFor(points, scoped.key, now, scoped.resetsAt));
       }
       return out;
+    },
+
+    async getSessionPlan(day?: string): Promise<Result<SessionPlan>> {
+      const dayStart = demoDayStart(now, day);
+      if (dayStart === null) {
+        return err(`"${day}" is not a calendar day — use YYYY-MM-DD`, 'bad-day');
+      }
+
+      // The real optimiser, not a copy of it. This used to be a second
+      // simulator living here, and it drifted exactly as you would expect: it
+      // recommended fixed anchors and then narrated a benefit its own numbers
+      // said was zero. Demo mode supplies synthetic *inputs*; the planning is
+      // the same code the app runs for real.
+      const plannable = accounts.filter(
+        (account) => account.kind !== 'api-key' && !account.disabled && !account.quarantinedAt,
+      );
+      const profile = demoProfile();
+
+      const plan = planDay({
+        dayStartMs: dayStart,
+        tzOffsetMin: -new Date(dayStart).getTimezoneOffset(),
+        schedule: DEMO_SCHEDULE,
+        accounts: plannable.map((account) => ({
+          slot: account.slot,
+          email: account.email,
+          ...(account.alias === undefined ? {} : { alias: account.alias }),
+          profile,
+        })),
+        peakWeight: settings.planner.peakWeight,
+        scheduleConfigured: settings.planner.configured,
+      });
+
+      return ok({
+        ...plan,
+        rationale: [
+          ...plan.rationale,
+          'Demo mode — this plan is simulated from synthetic history, not from your own usage.',
+        ],
+      });
+    },
+
+    async getUsageProfile(slot?: number): Promise<Result<UsageProfile>> {
+      if (slot !== undefined && !accounts.some((account) => account.slot === slot)) {
+        return err(`no account in slot ${slot}`, 'not-found');
+      }
+      return ok(demoProfile(slot));
+    },
+
+    async getAnchors() {
+      const observed: AnchorObservation[] = [];
+      for (const account of accounts) {
+        const usage = account.usage ?? account.lastGoodUsage;
+        const resetsAt = usage?.fiveHour?.resetsAt;
+        // No 5-hour window, no anchor to derive. Omitted rather than invented:
+        // the anchor is only meaningful because it is observed.
+        if (usage === undefined || resetsAt === undefined) continue;
+        const reset = Date.parse(resetsAt);
+        if (Number.isNaN(reset)) continue;
+        observed.push({
+          slot: account.slot,
+          anchorAt: reset - FIVE_HOUR_MS,
+          observedAt: usage.fetchedAt,
+        });
+      }
+      return observed;
+    },
+
+    async anchorNow(slot: number): Promise<AnchorResult> {
+      // Anchoring is the one planner action with a side effect outside this
+      // process: it spawns the Claude Code CLI and spends real quota. Demo mode
+      // refuses every write, and it must refuse this one loudest — there is no
+      // account here to bill and nothing on PATH we are entitled to run.
+      return {
+        ok: false,
+        slot,
+        error: `${DEMO_REFUSAL} — anchoring would run the Claude Code CLI and spend real quota, so it is disabled in demo mode.`,
+      };
     },
 
     async getSettings() {

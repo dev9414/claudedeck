@@ -1,11 +1,11 @@
 /**
  * The application shell: title bar, primary nav, and the routed view area.
  *
- * Routing is a hash string rather than a router dependency — the app has five
- * flat destinations and zero runtime deps is a project rule. Views are lazy so
- * the dashboard paints before the chart code is parsed, and each one reads
- * state through `useDeckState` instead of taking props, so the shell never has
- * to know what a view needs.
+ * Routing is a hash string rather than a router dependency — the app has a
+ * handful of flat destinations and zero runtime deps is a project rule. Views
+ * are lazy so the dashboard paints before the chart code is parsed, and each
+ * one reads state through `useDeckState` instead of taking props, so the shell
+ * never has to know what a view needs.
  */
 
 import { Component, Suspense, lazy, useCallback, useEffect, useMemo, useState } from 'react';
@@ -24,6 +24,7 @@ const VIEWS: Record<ViewId, ComponentType> = {
   dashboard: lazy(() => import('./views/Dashboard')),
   accounts: lazy(() => import('./views/Accounts')),
   timeline: lazy(() => import('./views/Timeline')),
+  planner: lazy(() => import('./views/Planner')),
   automation: lazy(() => import('./views/Automation')),
   settings: lazy(() => import('./views/Settings')),
 };

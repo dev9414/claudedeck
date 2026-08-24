@@ -146,6 +146,13 @@ export interface HistoryPoint {
   slot: number;
   /** Window key -> utilization at time `t`. */
   windows: Record<string, number>;
+  /**
+   * Additive: window key -> that window's reset instant (epoch ms) as reported
+   * at `t`. Absent on points recorded before the session planner existed, so
+   * every reader must tolerate `undefined` and fall back to inferring a
+   * boundary from a drop in utilization.
+   */
+  resets?: Record<string, number>;
 }
 
 export interface BurnRate {
@@ -168,6 +175,180 @@ export interface Forecast {
   expectedPct?: number;
   /** True when meaningfully above `expectedPct`. */
   aheadOfPace: boolean;
+}
+
+// ---------------------------------------------------------------------------
+// Session window planning
+// ---------------------------------------------------------------------------
+
+/*
+ * The 5-hour window is *anchored by your first message*, not by wall-clock, so
+ * the anchor is the one thing about it you actually control. Message at 09:00
+ * and your resets land at 14:00, 19:00, ...; message at 11:00 and they land at
+ * 16:00, 21:00, ...
+ *
+ * That matters when a heavy stretch would exhaust a window mid-flight: an
+ * anchor placed earlier makes the reset arrive *during* the busy stretch
+ * instead of after it. The planner simulates the day and finds the anchor that
+ * costs you the fewest blocked minutes.
+ *
+ * The live anchor is observable rather than assumed: `anchor = resetsAt - 5h`.
+ */
+
+/** The 5-hour window's length. The window's identity, not a tunable. */
+export const FIVE_HOUR_MS = 5 * 60 * 60 * 1000;
+
+/** Minutes from local midnight, 0..1439. */
+export type MinuteOfDay = number;
+
+/** A half-open local-time span. `end` may be <= `start` to mean "past midnight". */
+export interface DaySpan {
+  start: MinuteOfDay;
+  end: MinuteOfDay;
+}
+
+/** 0 = Sunday .. 6 = Saturday, matching `Date#getDay`. */
+export type Weekday = 0 | 1 | 2 | 3 | 4 | 5 | 6;
+
+export interface WorkSchedule {
+  /** The user's own label, e.g. "Weekdays" or "Saturday". */
+  label: string;
+  /** Weekdays this schedule applies to. */
+  days: Weekday[];
+  /** The working day as a whole. */
+  work: DaySpan;
+  /** The stretch you most need capacity for. Should sit inside `work`. */
+  peak: DaySpan;
+}
+
+export interface PlannerConfig {
+  enabled: boolean;
+  /**
+   * The user's declared hours. This is the input the whole feature turns on --
+   * nothing here is inferred, because only the user knows when their day
+   * actually matters. Several schedules may coexist (weekdays vs. a different
+   * Saturday); `days` decides which one applies.
+   */
+  schedules: WorkSchedule[];
+  /**
+   * True once the user has saved their own hours. While false, `schedules`
+   * holds a default the app invented, and every surface must label the plan as
+   * running on unconfirmed hours rather than presenting it as the user's own.
+   */
+  configured: boolean;
+  /**
+   * How many times heavier a blocked *peak* minute counts than a blocked
+   * working minute when scoring a plan.
+   */
+  peakWeight: number;
+  /** Notify when a recommended anchor time arrives. */
+  remind: boolean;
+  /** Minutes of warning before the anchor. */
+  remindLeadMin: number;
+  /**
+   * Place the anchor automatically by running the Claude Code CLI with a
+   * throwaway prompt. Off by default: it sends a real message and spends a
+   * small amount of your own quota, so it must be a deliberate choice.
+   */
+  autoAnchor: boolean;
+  /** The prompt used when anchoring. Kept tiny on purpose. */
+  anchorPrompt: string;
+}
+
+/**
+ * Utilization gained per hour of the day, learned from recorded history.
+ * This is what makes the plan yours rather than a generic guess.
+ */
+export interface UsageProfile {
+  /** 24 entries: mean utilization points gained during each local hour. */
+  hourly: number[];
+  /** Observations behind each hour, so thin data can be shown as thin. */
+  samples: number[];
+  /** 0-1 over the profile as a whole. */
+  confidence: number;
+  /** Weekdays the observations came from. */
+  days: Weekday[];
+}
+
+/** One simulated 5-hour window. */
+export interface WindowSpan {
+  /** Epoch ms. */
+  start: number;
+  end: number;
+  /** Simulated utilization when the window closes. May exceed 100. */
+  endPct: number;
+  /** Epoch ms the window is predicted to hit 100%, or null if it never does. */
+  exhaustedAt: number | null;
+  /** Minutes of this window spent blocked inside working hours. */
+  blockedMin: number;
+}
+
+export interface PlanOutcome {
+  /** Epoch ms of the anchoring first message. */
+  anchorAt: number;
+  windows: WindowSpan[];
+  /** Predicted blocked minutes inside working hours. */
+  blockedWorkMin: number;
+  /** Predicted blocked minutes inside peak hours. */
+  blockedPeakMin: number;
+  /** `blockedWorkMin + peakWeight * blockedPeakMin`. Lower is better. */
+  cost: number;
+}
+
+export interface AccountPlan {
+  slot: number;
+  email: string;
+  alias?: string;
+  outcome: PlanOutcome;
+  /** Why this account got this anchor, in one plain-English line. */
+  note: string;
+}
+
+export interface SessionPlan {
+  /** The local day planned, `YYYY-MM-DD`. */
+  day: string;
+  schedule: WorkSchedule;
+  profile: UsageProfile;
+  /** Recommended anchors, staggered so windows tile the working day. */
+  accounts: AccountPlan[];
+  /** The same day with no deliberate anchoring, for comparison. */
+  baseline: PlanOutcome;
+  /** Blocked peak minutes the plan avoids versus `baseline`. Can be 0. */
+  peakMinutesSaved: number;
+  /** The reasoning, shown to the user rather than hidden in a score. */
+  rationale: string[];
+  /**
+   * True when history is too thin for the profile to be worth acting on. The
+   * UI must say so instead of presenting a confident-looking schedule.
+   */
+  lowConfidence: boolean;
+  /**
+   * True when the plan ran against default hours the user has never confirmed.
+   * Distinct from `lowConfidence`: the history can be excellent and the hours
+   * still be a guess. Both must be surfaced separately.
+   */
+  usingDefaultSchedule: boolean;
+}
+
+/** A 5-hour anchor as actually observed, derived from `resetsAt - 5h`. */
+export interface AnchorObservation {
+  slot: number;
+  /** Epoch ms. */
+  anchorAt: number;
+  /** Epoch ms of the snapshot it came from. */
+  observedAt: number;
+}
+
+export interface AnchorResult {
+  ok: boolean;
+  slot: number;
+  /** Epoch ms the window now starts, once known. */
+  anchoredAt?: number;
+  /** Epoch ms the resulting window will reset. */
+  resetsAt?: number;
+  /** What was run, for the log. Never contains a token. */
+  command?: string;
+  error?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -272,6 +453,8 @@ export interface Settings {
   safeMode: boolean;
   /** Directory -> slot bindings for per-project account selection. */
   directoryMappings: DirectoryMapping[];
+  /** Session window planning: work hours and how anchors are placed. */
+  planner: PlannerConfig;
 }
 
 export interface DirectoryMapping {

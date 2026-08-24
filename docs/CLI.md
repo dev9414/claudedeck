@@ -80,7 +80,7 @@ Written by hand, because the project ships no runtime dependencies. The rules:
 
 - `--flag value` and `--flag=value` are equivalent for flags that take a value
   (`--slot`, `--alias`, `--strategy`, `--threshold`, `--since`, `--until`,
-  `--token`, `--email`, `--reason`).
+  `--token`, `--email`, `--reason`, `--day`).
 - Every other flag is boolean. `--flag=false` and `--flag=0` set it to false.
 - `--` stops flag parsing; everything after it is a positional.
 - An unknown flag **for that command** is an error, not a silent no-op:
@@ -124,11 +124,15 @@ Windows Terminal, VS Code or ConEmu is detected.
 | `2` | Nothing to do — already on that account, or below the threshold |
 | `3` | Blocked — no viable target to rotate onto |
 
-Codes `2` and `3` are produced by `switch` and by `auto --once`. Every other
-command uses `0` or `1`.
+Codes `2` and `3` are produced by `switch` and by `auto --once`; `anchor`
+produces `0`, `1` and `2`. Every other command uses `0` or `1`.
 
 For a switch specifically: `0` it moved, `1` it failed, `2` the target was
 already active or the rule declined, `3` there was no destination at all.
+
+For an anchor: `0` the window was opened (or `--dry-run` reported what it would
+open), `1` it failed, `2` there was nothing to open — the account already has a
+window running, or it has no 5-hour window at all.
 
 ---
 
@@ -470,6 +474,209 @@ Treat it as an estimate; `confidence` travels with it for that reason.
 
 ---
 
+### `plan`
+
+```
+claudedeck plan [--day YYYY-MM-DD] [--json]
+```
+
+Where to place each account's 5-hour anchor for a local day, what it costs in
+blocked minutes, and why. Read-only: it sends no message and writes nothing.
+
+| Flag | Effect |
+|---|---|
+| `--day` | The local day to plan, `YYYY-MM-DD`. Defaults to today |
+
+The day may also be given as a positional (`claudedeck plan 2026-08-24`). It is
+validated before the call and round-tripped through a `Date`, so `2026-02-30`
+fails with `expected a day as YYYY-MM-DD, got "2026-02-30"` rather than quietly
+becoming March 2nd. There is no usage refresh: the plan is built from recorded
+history and your declared schedule, exactly like `forecast`.
+
+The mechanic, the simulation and the optimiser are explained in
+**[docs/SESSION-PLANNER.md](SESSION-PLANNER.md)**.
+
+```
+day       2026-08-24  Monday
+schedule  Weekdays   work 09:00-18:00   peak 11:00-14:00
+profile   confidence 62%   9 of 24 hours observed   Mon Tue Wed Thu Fri
+blocked   45m of working hours, 20m of peak   (unanchored: 1h 30m / 55m)
+saved     35m of peak time
+cost      105   (a blocked peak minute counts 3x)
+
+   SLOT  ACCOUNT            ANCHOR  WHEN       RESETS        STALL
+*     1  ada                09:00   in 8m      14:00, 19:00    40m
+      2  grace@example.com  12:30   in 3h 38m  17:30            5m
+
+Anchoring slot 1 at 09:00 puts its reset at 14:00 - inside your 11:00-14:00 peak, where it would otherwise have run dry.
+Anchoring slot 2 at 12:30 puts its reset at 17:30, keeping a fresh window over the rest of the working day.
+Predicted blocked peak minutes: 20, down from 55 with no anchoring.
+  slot 1  Anchor at 09:00, resetting 14:00 and 19:00; 40 minutes blocked inside its windows.
+  slot 2  Anchor at 12:30, resetting 17:30; 5 minutes blocked inside its windows.
+```
+
+Reading it:
+
+- `blocked` is fleet-wide and the parenthetical is the same day with no
+  deliberate anchoring, so the two numbers are the whole argument for the plan.
+- `saved` appears only when the plan avoids blocked **peak** minutes. When the
+  win is in working minutes instead, the rationale says so and this row is
+  absent.
+- `WHEN` is relative to now, so an anchor that has already passed reads
+  `2h ago`.
+- `STALL` is that account's **own** blocked minutes, summed from its windows —
+  not the fleet total, which is identical on every row by definition.
+- The lines under the table are `SessionPlan.rationale` followed by one
+  `AccountPlan.note` per account, since the rationale only speaks for the first
+  two.
+- A last line on stderr points at `claudedeck anchor <slot>`, or says that
+  starting when you start is already the best plan.
+
+Two warnings are emitted on stderr when they apply, because they are separate
+problems: `planned against the default hours ClaudeDeck invented` (you have never
+saved your own hours) and `recorded history is too thin for this plan to be worth
+acting on yet`. A third notes that the planner is switched off in settings —
+`plan` still answers, since computing advice costs nothing.
+
+With no accounts, the header and rationale are printed, and the command still
+exits `0`.
+
+```json
+{
+  "schemaVersion": 1,
+  "command": "plan",
+  "ok": true,
+  "day": "2026-08-24",
+  "isBaseline": false,
+  "plan": {
+    "day": "2026-08-24",
+    "schedule": { "label": "Weekdays", "days": [1, 2, 3, 4, 5],
+                  "work": { "start": 540, "end": 1080 },
+                  "peak": { "start": 660, "end": 840 } },
+    "profile": { "hourly": [ "…24 numbers" ], "samples": [ "…24 numbers" ],
+                 "confidence": 0.62, "days": [1, 2, 3, 4, 5] },
+    "accounts": [
+      { "slot": 1, "email": "ada@example.com", "alias": "ada",
+        "outcome": {
+          "anchorAt": 1787461200000,
+          "windows": [ { "start": 1787461200000, "end": 1787479200000,
+                         "endPct": 100, "exhaustedAt": 1787476800000,
+                         "blockedMin": 40 } ],
+          "blockedWorkMin": 45, "blockedPeakMin": 20, "cost": 105 },
+        "note": "Anchor at 09:00, resetting 14:00 and 19:00; …" }
+    ],
+    "baseline": { "anchorAt": 1787461200000, "windows": [],
+                  "blockedWorkMin": 90, "blockedPeakMin": 55, "cost": 255 },
+    "peakMinutesSaved": 35,
+    "rationale": [ "…" ],
+    "lowConfidence": false,
+    "usingDefaultSchedule": true
+  },
+  "warnings": [ "…the same strings printed to stderr" ]
+}
+```
+
+`plan` is the `SessionPlan` from `getSessionPlan()`, verbatim except that
+`accounts[].alias` is `null` rather than absent, matching every other document
+this CLI emits. All instants are epoch milliseconds. `isBaseline` is derived, not
+part of `SessionPlan`: it is `true` when every recommended anchor equals the
+baseline anchor, which is the planner's way of saying "just start when you
+start".
+
+> `plan` has no `--slot`: it plans the whole fleet, because being blocked is a
+> property of the fleet rather than of one account.
+
+---
+
+### `anchor`
+
+```
+claudedeck anchor <target> [--dry-run] [--json]
+```
+
+Opens a 5-hour window **now** by running the official `claude` CLI once with the
+throwaway prompt from `planner.anchorPrompt`. That spends a little of that
+account's own quota. It schedules when your window starts; it raises no limit and
+bypasses none.
+
+| Flag | Effect |
+|---|---|
+| `--dry-run`, `-n` | Report what it would run, and run nothing |
+| `--slot`, `-s` | Alternative to the positional target |
+
+The target is required — no default to the active account, because this is the
+one command that spends quota. Usage refreshes first for the account in question,
+since a current reset time is what the "already anchored" check is built on.
+
+Outcomes:
+
+| Situation | Human output | `action` | Exit |
+|---|---|---|---|
+| Window opened | `anchored slot 2 (…) at 11:04 - the window resets 16:04` | `anchored` | `0` |
+| `--dry-run` | `would anchor slot 2 (…) by running the Claude Code CLI once` | `would-anchor` | `0` |
+| A window is already running | `slot 1 (…) is already anchored at 09:03 - its window resets 14:03 (in 2h 3m)` | `already-anchored` | `2` |
+| API key, or `no-quota` | `slot 3 (…) has no 5-hour subscription window to anchor` | `no-quota` | `2` |
+| The run failed | the service's own message | `failed` | `1` |
+| Quarantined slot | `slot 4 (…) is quarantined (…) - fix that login first` | — (error document) | `1` |
+
+**Why "already anchored" is exit `2` and not a re-anchor.** The live anchor is
+observable — `anchorAt = resetsAt - 5h` — so a reset still in the future means
+the window is already open, and no second message can move an anchor that has
+already been placed. Spending quota to change nothing would be worse than
+declining, so there is no `--force`.
+
+```
+$ claudedeck anchor 2 --dry-run
+would anchor slot 2 (grace@example.com) by running the Claude Code CLI once
+  runs    the official claude CLI, once, with the planner throwaway prompt
+  prompt  "hi"
+  opens   a 5-hour window, resetting about 13:56
+  costs   a few tokens of quota from that account - no limit is raised or bypassed
+nothing was run
+warning: slot 2 (grace@example.com) is not active, so anchoring it switches your login to it first
+```
+
+The two warnings on a dry run are the things worth knowing *before* the real
+run: anchoring a non-active account activates it first (the `claude` CLI reads
+Claude Code's own credential file, so that is the only way to aim it at a
+particular login), and **safe mode makes a real run refuse** before anything is
+sent.
+
+`prompt` is the configured `planner.anchorPrompt`. The service sanitizes it
+before running — characters a Windows `.cmd` shim could reinterpret are dropped —
+so a prompt full of punctuation may reach `claude` slightly shortened.
+
+```json
+{ "schemaVersion": 1, "command": "anchor", "ok": true, "action": "anchored",
+  "dryRun": false, "slot": 2, "email": "grace@example.com", "alias": null,
+  "warnings": [], "error": null,
+  "message": "anchored slot 2 (grace@example.com) at 11:04 - the window resets 16:04",
+  "prompt": "hi",
+  "anchoredAt": 1787475840000,
+  "resetsAt": 1787493840000,
+  "windowEndsAt": 1787493840000,
+  "ranCommand": "claude -p \"hi\"",
+  "exitCode": 0 }
+```
+
+Notes on the document:
+
+- `action` is the branch that ran, and is the field to switch on. `ok` is
+  `false` only for `failed`; `already-anchored` and `no-quota` are `ok: true`
+  with `exitCode: 2`, because declining to act is not an error.
+- `anchoredAt` and `resetsAt` are what the service reported after re-polling —
+  it reads the boundary back from the API rather than reporting the moment the
+  call returned. Either can be `null`.
+- `windowEndsAt` is `resetsAt` when the API gave one, else `anchoredAt + 5h`,
+  derived from the window's fixed length.
+- `ranCommand` is `AnchorResult.command` — the command as run, renamed so it
+  cannot collide with the document's own `command` field. It never contains a
+  token.
+- `wouldResetAt` appears on `would-anchor` instead: `now + 5h`, what a real run
+  started at that moment would open.
+
+---
+
 ### `export`
 
 ```
@@ -621,7 +828,8 @@ human message always goes to stderr regardless.
 may see include `not-found`, `ambiguous`, `unsafe-output`,
 `services-unavailable`, `contract-drift`, `safe-mode`, `not-signed-in`,
 `no-identity`, `bad-token`, `bad-payload`, `no-credentials`, `import-failed`,
-`too-few-accounts` and `lock-timeout`. Treat the list as open.
+`too-few-accounts`, `lock-timeout`, `quarantined` and `bad-day`. Treat the list
+as open.
 
 ---
 
@@ -664,6 +872,13 @@ claudedeck switch --strategy best --dry-run
 
 # Follow the engine's decisions live
 claudedeck auto --json | jq -c 'select(.kind != "poll")'
+
+# Today's recommended anchors, one per line
+claudedeck plan --json |
+  jq -r '.plan.accounts[] | "\(.slot) \(.outcome.anchorAt)"'
+
+# Anchor an account, treating "nothing to do" as success
+claudedeck anchor 1; case $? in 0) echo opened;; 2) echo "already open";; esac
 
 # A week of one account's 5h utilization as CSV
 claudedeck history --slot 2 --since 7d --json |

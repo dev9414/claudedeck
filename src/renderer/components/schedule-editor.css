@@ -1,0 +1,228 @@
+/*
+ * Schedule editor.
+ *
+ * The day strip is the only unusual bit: 48 half-hour cells laid out as a flex
+ * row, coloured by role. It is marked aria-hidden and paired with a text
+ * summary, because a band of colour is not an accessible way to state "your
+ * peak is 11:00 to 14:00" — the sentence underneath is the real answer and the
+ * strip is the glance.
+ *
+ * Peak uses the sequential ramp rather than a status colour: these hours are a
+ * magnitude of importance, not a warning, and status colours are reserved.
+ */
+
+.cd-sched {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.cd-sched-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.cd-sched-row > label {
+  min-width: 4.5rem;
+  font-size: 0.8125rem;
+  color: var(--text-secondary);
+}
+
+.cd-sched input[type='text'],
+.cd-sched input[type='time'] {
+  font: inherit;
+  color: var(--text-primary);
+  background: var(--surface-raised);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  padding: 6px 8px;
+}
+
+.cd-sched input[type='text'] {
+  flex: 1;
+  min-width: 0;
+}
+
+.cd-sched input:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+.cd-sched fieldset {
+  border: 0;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  /* flex-start, not flex-end: the hint under one field must not shove its
+     sibling out of alignment. */
+  align-items: flex-start;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+}
+
+.cd-sched legend {
+  padding: 0;
+  margin-bottom: var(--space-2);
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+/* A legend inside a flex fieldset does not participate in the row, so the
+   fields need their own line. */
+.cd-sched-days,
+.cd-sched-times {
+  display: block;
+}
+
+.cd-sched-chips {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.cd-daychip {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  border: 1px solid var(--border-strong);
+  background: var(--surface-raised);
+  color: var(--text-secondary);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  transition:
+    background-color var(--dur-fast, 140ms) var(--ease-entrance, ease),
+    color var(--dur-fast, 140ms) var(--ease-entrance, ease),
+    border-color var(--dur-fast, 140ms) var(--ease-entrance, ease);
+}
+
+.cd-daychip:hover:not(:disabled) {
+  border-color: var(--text-muted);
+}
+
+.cd-daychip--on {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-ink);
+}
+
+.cd-daychip:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.cd-sched-times {
+  display: flex;
+}
+
+.cd-timefield {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.cd-timefield > label {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.cd-timefield-hint {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  max-width: 22ch;
+}
+
+/* --- day strip ---------------------------------------------------------- */
+
+.cd-strip-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.cd-strip {
+  display: flex;
+  gap: 1px;
+  height: 26px;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  background: var(--surface-2);
+}
+
+.cd-strip-cell {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+.cd-strip-cell--off {
+  background: var(--surface-2);
+}
+
+.cd-strip-cell--work {
+  background: var(--seq-250);
+}
+
+.cd-strip-cell--peak {
+  background: var(--seq-550);
+}
+
+.cd-strip-axis {
+  position: relative;
+  height: 1em;
+  font-size: 0.6875rem;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.cd-strip-axis > span {
+  position: absolute;
+  transform: translateX(-50%);
+  white-space: nowrap;
+}
+
+.cd-strip-axis > span:first-child {
+  transform: none;
+}
+
+.cd-strip-axis > span:last-child {
+  transform: translateX(-100%);
+}
+
+.cd-strip-summary {
+  margin: 0;
+  font-size: 0.8125rem;
+  color: var(--text-secondary);
+}
+
+/* --- validation --------------------------------------------------------- */
+
+.cd-sched-problems {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.cd-sched-problems > li {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  font-size: 0.8125rem;
+  color: var(--text-secondary);
+}
+
+/* Icon plus text: the warning never rests on colour alone. */
+.cd-sched-problems svg {
+  color: var(--status-warning);
+  flex: none;
+  margin-top: 1px;
+}
+
+.cd-sched-footnote {
+  margin: 0;
+  font-size: 0.8125rem;
+  color: var(--text-muted);
+}

@@ -63,6 +63,10 @@ situation legible before it bites:
 |---|---|
 | <img src="assets/screenshots/settings.png" alt="Settings view: theme, notifications, safe mode, history retention and data locations"> | <img src="assets/screenshots/onboarding.png" alt="Onboarding wizard step one, detecting the local Claude Code installation"> |
 
+| Planner | Declaring your hours |
+|---|---|
+| <img src="assets/screenshots/planner-light.png" alt="Planner view in light mode: the day window by window, with recommended first-message times and the learned hourly usage profile"> | <img src="assets/screenshots/onboarding-hours.png" alt="Onboarding step three: picking the weekdays, working hours and peak hours the planner should optimise against"> |
+
 ---
 
 ## Install
@@ -137,6 +141,36 @@ Two details that make the projection honest rather than decorative:
 - **It reports its own confidence.** Two samples an hour apart is low
   confidence, and the UI renders it as an explicitly-labelled dashed estimate
   with a shaded cone — never as a confident-looking timestamp.
+
+### Session-window planning
+
+Your 5-hour window starts when you send your **first message**, not on the hour.
+Message at 09:00 and your resets land at 14:00, 19:00; message at 11:00 and they
+land at 16:00, 21:00. So when a heavy stretch would drain a window mid-flight, an
+earlier anchor makes the reset arrive *during* that stretch instead of after it.
+
+Say your peak is 11:00–14:00 and you start typing at 11:00. The window runs dry
+at 13:13 and will not roll over until 16:00 — your afternoon is gone. Send one
+message at 09:00 instead and you hit 100% at the same 13:13, but the reset now
+lands at 14:00: 167 blocked minutes become 47.
+
+ClaudeDeck learns which hours you actually burn quota in from its own recorded
+history, simulates the day at five-minute resolution, and searches every anchor
+from six hours before your day starts to the end of your peak for the one that
+costs the fewest blocked minutes — counting a blocked peak minute three times
+over, and staggering the anchors when you have several accounts. It places an
+anchor by running the official `claude` CLI once with a two-character prompt:
+this schedules when your own window starts, and raises no limit.
+
+<img src="assets/screenshots/planner.png" width="820" alt="Planner view: a day timeline with one lane per account split into 5-hour windows, blocked stretches shaded, a faint no-plan lane for comparison, and the recommended first-message time per account">
+
+Your hours are **declared, not inferred** — ClaudeDeck learns *when you burn
+quota*, but only you know *when it matters*. A burst of 3am activity might be the
+one night you were firefighting. So the planner stays off until you set them, and
+says plainly when it is running on defaults you never confirmed.
+
+The mechanic, the maths, and an honest account of how wrong the numbers can be:
+**[docs/SESSION-PLANNER.md](docs/SESSION-PLANNER.md)**.
 
 ### Preview before it writes
 

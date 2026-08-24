@@ -17,13 +17,15 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
-import type { Account, DeckState } from '@shared/types';
+import type { Account, DeckState, WorkSchedule } from '@shared/types';
 import type { DeckApi } from '@shared/ipc';
 import { useDeckState } from '../hooks/useDeckState';
 import { Badge, type BadgeTone } from '../components/Badge';
 import { Button, IconButton } from '../components/Button';
 import { Icon, type IconName } from '../components/Icon';
 import { Logo } from '../components/Logo';
+import { ScheduleEditor } from '../components/ScheduleEditor';
+import { DEFAULT_SCHEDULE, formatHHMM, validateSchedule } from '@core/schedule';
 import './views.css';
 
 const DOCS_URL = 'https://docs.claude.com/en/docs/claude-code/overview';
@@ -89,6 +91,7 @@ const VIEW_CSS = `
 const STEPS = [
   { title: 'Detect', heading: 'Find your Claude Code install' },
   { title: 'Add an account', heading: 'Capture your first account' },
+  { title: 'Your hours', heading: 'When does your day actually matter?' },
   { title: 'Choose behavior', heading: 'Decide how switching works' },
 ] as const;
 
@@ -327,10 +330,13 @@ function Wizard({
           <AddAccountStep state={state} api={api} onBack={() => goTo(0)} onNext={() => goTo(2)} />
         ) : null}
         {step === 2 ? (
+          <HoursStep state={state} api={api} onBack={() => goTo(1)} onNext={() => goTo(3)} />
+        ) : null}
+        {step === 3 ? (
           <BehaviorStep
             state={state}
             api={api}
-            onBack={() => goTo(1)}
+            onBack={() => goTo(2)}
             onDone={() => {
               writeStoredStep(null);
               setDone(true);
@@ -740,6 +746,111 @@ function AddAccountStep({
 // ---------------------------------------------------------------------------
 // Step 3 — behavior
 // ---------------------------------------------------------------------------
+
+/**
+ * The user's hours.
+ *
+ * Asked here rather than left in Settings because it is the one input the
+ * session planner cannot infer, and a planner running on hours nobody confirmed
+ * is worse than no planner. Skipping is allowed and honest: the planner simply
+ * stays off until there is something real to plan against.
+ */
+function HoursStep({
+  state,
+  api,
+  onBack,
+  onNext,
+}: {
+  state: DeckState;
+  api: DeckApi;
+  onBack: () => void;
+  onNext: () => void;
+}) {
+  const cfg = state.settings.planner;
+  const [schedule, setSchedule] = useState<WorkSchedule>(cfg.schedules[0] ?? DEFAULT_SCHEDULE);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const problems = validateSchedule(schedule);
+  const blocking = problems.length > 0 && schedule.days.length === 0;
+
+  const save = async (enable: boolean) => {
+    setBusy(true);
+    setError(null);
+    try {
+      const saved = await api.updateSettings({
+        planner: {
+          ...cfg,
+          enabled: enable,
+          // Only a real save marks the hours as the user's own; skipping leaves
+          // `configured` false so every surface keeps calling them defaults.
+          configured: enable,
+          schedules: enable ? [schedule] : cfg.schedules,
+        },
+      });
+      if (!saved.ok) {
+        setError(
+          `Your hours were not saved: ${saved.error}. If safe mode is on, turn it off in Settings and try again.`,
+        );
+        return;
+      }
+      onNext();
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <>
+      <section className="cd-card">
+        <div className="cd-stack">
+          <p className="cd-view-sub">
+            Claude&apos;s 5-hour quota window starts at your <strong>first message</strong>, not on the clock. Send one
+            at {formatHHMM(schedule.work.start)} and your resets land 5 hours later; send it at{' '}
+            {formatHHMM(schedule.peak.start)} and they land 5 hours after that.
+          </p>
+          <p className="cd-view-sub">
+            Tell ClaudeDeck when your day actually matters and it can work out which start time keeps a reset inside
+            that stretch, instead of just after it.
+          </p>
+        </div>
+
+        <ScheduleEditor
+          value={schedule}
+          onChange={setSchedule}
+          showLabel={false}
+          disabled={busy}
+          footnote="You can change this any time, and keep more than one schedule, in the Planner view."
+        />
+      </section>
+
+      {error ? (
+        <Note tone="warning" icon="alert-triangle">
+          {error}
+        </Note>
+      ) : null}
+
+      <div className="cdo-actions">
+        <Button variant="ghost" icon="chevron" onClick={onBack} disabled={busy}>
+          Back
+        </Button>
+        <span className="cd-spacer" />
+        <Button variant="ghost" onClick={() => void save(false)} disabled={busy}>
+          Skip for now
+        </Button>
+        <Button
+          variant="primary"
+          trailingIcon="chevron"
+          onClick={() => void save(true)}
+          busy={busy}
+          disabled={blocking}
+        >
+          Save my hours
+        </Button>
+      </div>
+    </>
+  );
+}
 
 function BehaviorStep({
   state,

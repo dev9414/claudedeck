@@ -1,0 +1,700 @@
+/**
+ * Planner: where to place the first message of the day.
+ *
+ * The 5-hour window is anchored by that first message rather than by the clock,
+ * so the anchor is the one property of it the user controls. This view exists to
+ * make that controllable: it explains the mechanic to someone who has never
+ * heard of it, takes the one input the app cannot infer (which hours actually
+ * matter), and then shows the simulated day next to the same day with no plan at
+ * all so the advice can be checked rather than trusted.
+ *
+ * Two kinds of doubt are surfaced separately, because they are separate: thin
+ * history (`lowConfidence`) and hours nobody confirmed (`usingDefaultSchedule`).
+ * A plan can suffer from either without the other, and collapsing them into one
+ * "roughly" would hide which one the user can fix.
+ */
+
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { FIVE_HOUR_MS } from '@shared/types';
+import type {
+  AnchorObservation,
+  AnchorResult,
+  PlannerConfig,
+  SessionPlan,
+  Settings,
+  UsageProfile,
+  Weekday,
+  WorkSchedule,
+} from '@shared/types';
+import { DEFAULT_SCHEDULE, formatHHMM, resolveSchedule, validateSchedule } from '@core/schedule';
+import { useDeckState } from '../hooks/useDeckState';
+import { Badge } from '../components/Badge';
+import { Button } from '../components/Button';
+import { EmptyState } from '../components/EmptyState';
+import { Icon } from '../components/Icon';
+import { ScheduleEditor } from '../components/ScheduleEditor';
+import { Toggle } from '../components/Toggle';
+import { ChartFrame, useNow } from '../charts/ChartFrame';
+import { HourProfile, hourProfileTable } from '../charts/HourProfile';
+import { WindowPlan, windowPlanHeight, windowPlanTable, type WindowPlanLane } from '../charts/WindowPlan';
+import { formatClock } from '../charts/scales';
+import './views.css';
+
+const MIN_PER_HOUR = 60;
+
+/**
+ * Fallbacks for a settings file written before the planner existed. They mirror
+ * `DEFAULT_PLANNER` in the main process, which the renderer must not import —
+ * nothing here may reach into main — and every write goes back through
+ * `updateSettings`, which re-validates them anyway.
+ */
+const FALLBACK_PEAK_WEIGHT = 3;
+const FALLBACK_REMIND_LEAD_MIN = 10;
+const FALLBACK_ANCHOR_PROMPT = 'hi';
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+function messageOf(cause: unknown): string {
+  if (cause instanceof Error) return cause.message;
+  return typeof cause === 'string' ? cause : 'The main process did not answer.';
+}
+
+/**
+ * The planner block, read defensively. Settings arrive from a JSON file on disk
+ * and, during UI work, from the bridgeless stub — either can simply not have
+ * this section yet, and a view that crashes on that is worse than one that
+ * shows the defaults and says so.
+ */
+function readPlannerConfig(settings: Settings | undefined): PlannerConfig {
+  const raw = settings?.planner as Partial<PlannerConfig> | undefined;
+  const schedules =
+    raw && Array.isArray(raw.schedules) && raw.schedules.length > 0
+      ? raw.schedules
+      : [DEFAULT_SCHEDULE];
+  const weight = raw?.peakWeight;
+  const lead = raw?.remindLeadMin;
+  const prompt = raw?.anchorPrompt;
+  return {
+    enabled: raw?.enabled === true,
+    schedules,
+    configured: raw?.configured === true,
+    peakWeight: typeof weight === 'number' && Number.isFinite(weight) ? weight : FALLBACK_PEAK_WEIGHT,
+    remind: raw?.remind !== false,
+    remindLeadMin:
+      typeof lead === 'number' && Number.isFinite(lead) ? lead : FALLBACK_REMIND_LEAD_MIN,
+    autoAnchor: raw?.autoAnchor === true,
+    anchorPrompt:
+      typeof prompt === 'string' && prompt.length > 0 ? prompt : FALLBACK_ANCHOR_PROMPT,
+  };
+}
+
+/** Local midnight of the `YYYY-MM-DD` the plan was computed for. */
+function dayStartFromKey(day: string): number | null {
+  const parts = /^(\d{4})-(\d{2})-(\d{2})$/.exec(day);
+  const year = parts?.[1];
+  const month = parts?.[2];
+  const date = parts?.[3];
+  if (year === undefined || month === undefined || date === undefined) return null;
+  const t = new Date(Number(year), Number(month) - 1, Number(date)).getTime();
+  return Number.isFinite(t) ? t : null;
+}
+
+function localMidnight(at: number): number {
+  const date = new Date(at);
+  date.setHours(0, 0, 0, 0);
+  return date.getTime();
+}
+
+/** Minutes the way a person says them. */
+function minutesText(value: number): string {
+  const total = Math.max(0, Math.round(value));
+  if (total < MIN_PER_HOUR) return `${total} minute${total === 1 ? '' : 's'}`;
+  const hours = Math.floor(total / MIN_PER_HOUR);
+  const rest = total % MIN_PER_HOUR;
+  if (rest === 0) return `${hours} hour${hours === 1 ? '' : 's'}`;
+  return `${hours}h ${rest}m`;
+}
+
+/** The index of the schedule that governs `weekday`, matching `resolveSchedule`. */
+function applicableIndex(schedules: readonly WorkSchedule[], weekday: Weekday): number {
+  return schedules.findIndex((entry) => Array.isArray(entry.days) && entry.days.includes(weekday));
+}
+
+// ---------------------------------------------------------------------------
+// View
+// ---------------------------------------------------------------------------
+
+export function Planner() {
+  const { state, loading, error, api, reload } = useDeckState();
+  const now = useNow(60_000);
+
+  const cfg = useMemo(() => readPlannerConfig(state?.settings), [state?.settings]);
+
+  const [plan, setPlan] = useState<SessionPlan | null>(null);
+  const [planError, setPlanError] = useState<string | null>(null);
+  const [planLoading, setPlanLoading] = useState(true);
+  const [profile, setProfile] = useState<UsageProfile | null>(null);
+  const [anchors, setAnchors] = useState<AnchorObservation[] | null>(null);
+  const [nonce, setNonce] = useState(0);
+
+  const [draft, setDraft] = useState<WorkSchedule | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [savedAt, setSavedAt] = useState<number | null>(null);
+
+  const [confirming, setConfirming] = useState<number | null>(null);
+  const [busySlot, setBusySlot] = useState<number | null>(null);
+  const [anchorResults, setAnchorResults] = useState<Record<number, AnchorResult>>({});
+
+  // Every poll can move the plan, and so can any change to the hours it is
+  // scored against; those two things are the whole trigger for a re-plan.
+  const pollStamp = (state?.accounts ?? [])
+    .map((account) => `${account.slot}:${account.usage?.fetchedAt ?? 0}`)
+    .join(',');
+  const scheduleStamp = JSON.stringify({
+    schedules: cfg.schedules,
+    weight: cfg.peakWeight,
+    configured: cfg.configured,
+  });
+
+  useEffect(() => {
+    let cancelled = false;
+    setPlanLoading(true);
+    setPlanError(null);
+    void (async () => {
+      try {
+        const result = await api.getSessionPlan();
+        if (cancelled) return;
+        if (result.ok) setPlan(result.value);
+        else {
+          setPlan(null);
+          setPlanError(result.error);
+        }
+      } catch (cause) {
+        // A missing bridge method throws rather than rejecting, so this is not
+        // only for transport errors.
+        if (!cancelled) {
+          setPlan(null);
+          setPlanError(messageOf(cause));
+        }
+      } finally {
+        if (!cancelled) setPlanLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [api, scheduleStamp, pollStamp, nonce]);
+
+  // The profile and the observed anchors decorate the plan rather than carry
+  // it, so they fail softly: the view says what is missing and stays up.
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const [profileResult, observed] = await Promise.all([
+          api.getUsageProfile(),
+          api.getAnchors(),
+        ]);
+        if (cancelled) return;
+        setProfile(profileResult.ok ? profileResult.value : null);
+        setAnchors(observed);
+      } catch {
+        if (!cancelled) {
+          setProfile(null);
+          setAnchors([]);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [api, pollStamp, nonce]);
+
+  const recompute = useCallback(() => setNonce((value) => value + 1), []);
+
+  const anchorNow = useCallback(
+    async (slot: number) => {
+      setBusySlot(slot);
+      try {
+        const result = await api.anchorNow(slot);
+        setAnchorResults((current) => ({ ...current, [slot]: result }));
+        // A successful anchor moves the observed window, which the plan and the
+        // anchor markers both read.
+        if (result.ok) setNonce((value) => value + 1);
+      } catch (cause) {
+        setAnchorResults((current) => ({
+          ...current,
+          [slot]: { ok: false, slot, error: messageOf(cause) },
+        }));
+      } finally {
+        setBusySlot(null);
+        setConfirming(null);
+      }
+    },
+    [api],
+  );
+
+  // --- gates ---------------------------------------------------------------
+
+  if (loading && !state) {
+    return (
+      <p className="cd-view-loading" role="status" aria-live="polite">
+        <Icon name="refresh" className="cd-spin" />
+        Reading your schedule and recorded usage…
+      </p>
+    );
+  }
+
+  if (!state) {
+    return (
+      <div className="cd-view">
+        <EmptyState
+          icon="alert-octagon"
+          tone="warning"
+          title="The planner has no state to read"
+          description={error ?? 'The main process did not answer the state request.'}
+          action={
+            <Button variant="primary" icon="refresh" onClick={() => void reload()}>
+              Try again
+            </Button>
+          }
+        />
+      </div>
+    );
+  }
+
+  // --- derived -------------------------------------------------------------
+
+  const dayStartMs = (plan ? dayStartFromKey(plan.day) : null) ?? localMidnight(now);
+  const weekday = new Date(dayStartMs).getDay() as Weekday;
+  // `governing` is the schedule the plan was actually scored against, so it is
+  // what the charts draw. An unsaved draft only feeds the editor: banding the
+  // plot with hours the simulation never saw would be a lie about the plan.
+  const governing =
+    plan?.schedule ?? resolveSchedule(cfg.schedules, weekday) ?? cfg.schedules[0] ?? DEFAULT_SCHEDULE;
+  const schedule = draft ?? governing;
+  const problems = validateSchedule(schedule);
+  const dirty = draft !== null;
+
+  const anchorBySlot = new Map((anchors ?? []).map((entry) => [entry.slot, entry]));
+  const lanes: WindowPlanLane[] = (plan?.accounts ?? []).map((account) => ({
+    slot: account.slot,
+    label: account.alias ?? account.email,
+    sub: `slot ${account.slot}`,
+    outcome: account.outcome,
+    observedAnchorAt: anchorBySlot.get(account.slot)?.anchorAt,
+  }));
+
+  const chartProfile = profile ?? plan?.profile ?? null;
+  const dayContainsNow = now >= dayStartMs && now < dayStartMs + 24 * MIN_PER_HOUR * 60_000;
+
+  const saveSchedule = async () => {
+    setSaving(true);
+    setSaveError(null);
+    try {
+      const index = applicableIndex(cfg.schedules, weekday);
+      const schedules =
+        index >= 0
+          ? cfg.schedules.map((entry, position) => (position === index ? schedule : entry))
+          : [...cfg.schedules, schedule];
+      // `configured` is the load-bearing flag: it is what lets every surface
+      // stop calling these hours a guess.
+      const result = await api.updateSettings({
+        planner: { ...cfg, schedules, configured: true },
+      });
+      if (!result.ok) {
+        setSaveError(result.error);
+        return;
+      }
+      setDraft(null);
+      setSavedAt(Date.now());
+      recompute();
+    } catch (cause) {
+      setSaveError(messageOf(cause));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const setEnabled = async (next: boolean) => {
+    setSaveError(null);
+    const result = await api.updateSettings({ planner: { ...cfg, enabled: next } });
+    if (!result.ok) setSaveError(result.error);
+  };
+
+  return (
+    <div className="cd-view">
+      <header className="cd-view-head">
+        <h1 className="cd-h1">Planner</h1>
+        <p className="cd-view-sub">
+          Where to put the first message of the day, so a reset lands where you need one.
+        </p>
+        <span className="cd-spacer" />
+        {plan ? <Badge tone="neutral" icon="clock">{`Plan for ${plan.day}`}</Badge> : null}
+        {state.demoMode ? <Badge tone="info">Demo data</Badge> : null}
+      </header>
+
+      <section className="cd-card" aria-labelledby="cd-pl-why">
+        <div className="cd-card-head">
+          <Icon name="info" />
+          <h2 className="cd-h2" id="cd-pl-why">
+            Why the start time matters
+          </h2>
+        </div>
+        <p className="cd-secondary">
+          Claude&apos;s 5-hour quota window starts at your <strong>first message</strong>, not on the
+          clock: send one at 09:00 and your resets land at 14:00 and 19:00, send it at 11:00 and they
+          land at 16:00 and 21:00 instead.
+        </p>
+        <p className="cd-secondary">
+          So if a heavy stretch would drain a window part-way through, starting earlier makes the
+          reset arrive <em>during</em> that stretch instead of just after it — and ClaudeDeck
+          simulates your day against your recorded usage to find the start time that leaves you
+          blocked for the fewest minutes, counting your peak hours heaviest.
+        </p>
+      </section>
+
+      {error ? (
+        <div className="cd-note cd-note--error" role="alert">
+          <Icon name="alert-octagon" />
+          <span className="cd-note-body">
+            <span className="cd-note-title">State update failed</span>
+            <span>{error} What you see below came from the last data ClaudeDeck received.</span>
+          </span>
+        </div>
+      ) : null}
+
+      {plan?.lowConfidence ? (
+        <div className="cd-note cd-note--warning" role="note">
+          <Icon name="alert-triangle" />
+          <span className="cd-note-body">
+            <span className="cd-note-title">This plan is a guess, not a finding</span>
+            <span>
+              ClaudeDeck has not yet watched you work for long enough to know your day. Treat the
+              times below as a starting point rather than advice — the plan sharpens on its own as
+              more usage is recorded, and the hourly profile lower down shows exactly which hours
+              are still thin.
+            </span>
+          </span>
+        </div>
+      ) : null}
+
+      {plan?.usingDefaultSchedule ? (
+        <div className="cd-note" role="note">
+          <Icon name="clock" />
+          <span className="cd-note-body">
+            <span className="cd-note-title">Running on hours you have not confirmed</span>
+            <span>
+              {`These are ClaudeDeck's default hours (${formatHHMM(governing.work.start)} to ${formatHHMM(
+                governing.work.end,
+              )}), not yours. Set your own below and the plan is scored against a day that actually exists.`}
+            </span>
+          </span>
+        </div>
+      ) : null}
+
+      {planError ? (
+        <div className="cd-note cd-note--error" role="alert">
+          <Icon name="alert-octagon" />
+          <span className="cd-note-body">
+            <span className="cd-note-title">The plan could not be computed</span>
+            <span>
+              {planError}
+              {cfg.enabled ? '' : ' The planner is currently switched off, which may be why.'}
+            </span>
+          </span>
+          <span className="cd-spacer" />
+          <Button size="sm" icon="refresh" onClick={recompute}>
+            Try again
+          </Button>
+        </div>
+      ) : null}
+
+      {planLoading && !plan ? (
+        <p className="cd-view-loading" role="status" aria-live="polite">
+          <Icon name="refresh" className="cd-spin" />
+          Simulating the day against your recorded usage…
+        </p>
+      ) : null}
+
+      {plan ? (
+        <ChartFrame
+          title="The day, window by window"
+          subtitle={
+            `One lane per account, each split into its 5-hour windows. Boundaries are the resets the ` +
+            `anchor produces. The faint lane at the bottom is the same day with no plan at all. ` +
+            `Every mark is an estimate.`
+          }
+          height={windowPlanHeight(lanes.length, true)}
+          tableRows={windowPlanTable({ lanes, baseline: plan.baseline }) ?? undefined}
+        >
+          <WindowPlan
+            dayStartMs={dayStartMs}
+            work={governing.work}
+            peak={governing.peak}
+            lanes={lanes}
+            baseline={plan.baseline}
+            now={dayContainsNow ? now : undefined}
+          />
+        </ChartFrame>
+      ) : null}
+
+      <div className="cd-tl-split">
+        <div className="cd-stack">
+          {plan && plan.accounts.length === 0 ? (
+            <EmptyState
+              icon="users"
+              title="No account to anchor"
+              description="The planner places a first message per account. Add one in Accounts and this fills in."
+            />
+          ) : null}
+
+          {plan && plan.accounts.length > 0 ? (
+            <section className="cd-card" aria-labelledby="cd-pl-rec">
+              <div className="cd-card-head">
+                <Icon name="bolt" />
+                <h2 className="cd-h2" id="cd-pl-rec">
+                  Recommended start times
+                </h2>
+                <span className="cd-spacer" />
+                <Button size="sm" icon="refresh" onClick={recompute} busy={planLoading}>
+                  Recompute
+                </Button>
+              </div>
+
+              {plan.peakMinutesSaved === 0 ? (
+                <p className="cd-secondary">
+                  Anchoring would not help today. On the simulated day, no start time keeps more of
+                  your peak hours unblocked than simply beginning work at{' '}
+                  {formatHHMM(governing.work.start)} would, so there is nothing to gain by waiting or
+                  by starting early.
+                </p>
+              ) : (
+                <p className="cd-secondary">
+                  Following this plan is predicted to keep{' '}
+                  <strong>{minutesText(plan.peakMinutesSaved)}</strong> of your peak hours unblocked
+                  compared with just starting work at {formatHHMM(governing.work.start)}. That figure
+                  is an estimate from recorded history.
+                </p>
+              )}
+
+              {plan.accounts.map((account) => {
+                const first = account.outcome.windows[0];
+                const reset = first ? first.end : account.outcome.anchorAt + FIVE_HOUR_MS;
+                const observed = anchorBySlot.get(account.slot);
+                const result = anchorResults[account.slot];
+                const confirmingThis = confirming === account.slot;
+                return (
+                  <div className="cd-stack" key={account.slot}>
+                    <hr className="cd-divider" />
+                    <div className="cd-row">
+                      <strong>{account.alias ?? account.email}</strong>
+                      <Badge tone="neutral" icon={null}>{`slot ${account.slot}`}</Badge>
+                    </div>
+                    <ul className="cd-forecast-list">
+                      <li>
+                        <Icon name="clock" size={12} />
+                        <strong>{`Send the first message at ${formatClock(account.outcome.anchorAt)}`}</strong>
+                        <span>estimate</span>
+                      </li>
+                      <li>
+                        <Icon name="refresh" size={12} />
+                        <strong>{`That window resets at ${formatClock(reset)}`}</strong>
+                        <span>5 hours after the anchor</span>
+                      </li>
+                      <li>
+                        <Icon name={observed ? 'check' : 'minus'} size={12} />
+                        <strong>
+                          {observed
+                            ? `Today's window actually opened at ${formatClock(observed.anchorAt)}`
+                            : 'No open window observed for this account'}
+                        </strong>
+                        <span>{observed ? 'measured' : 'nothing to measure yet'}</span>
+                      </li>
+                    </ul>
+                    <p className="cd-secondary">{account.note}</p>
+
+                    <div className="cd-row">
+                      {confirmingThis ? (
+                        <>
+                          <Button
+                            variant="primary"
+                            icon="bolt"
+                            busy={busySlot === account.slot}
+                            onClick={() => void anchorNow(account.slot)}
+                          >
+                            Send it now
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            onClick={() => setConfirming(null)}
+                            disabled={busySlot === account.slot}
+                          >
+                            Cancel
+                          </Button>
+                        </>
+                      ) : (
+                        <Button
+                          icon="bolt"
+                          onClick={() => setConfirming(account.slot)}
+                          disabled={busySlot !== null}
+                        >
+                          Anchor now
+                        </Button>
+                      )}
+                    </div>
+                    <p className="cd-muted">
+                      {`Anchor now runs Claude Code on this account with the prompt "${cfg.anchorPrompt}". That is a real message: it opens the 5-hour window immediately and spends a small amount of this account's own quota. Nothing is sent until you click.`}
+                    </p>
+
+                    {result?.ok ? (
+                      <p className="cd-secondary" role="status">
+                        <Icon name="check" size={12} />{' '}
+                        {`Window opened${
+                          result.anchoredAt === undefined
+                            ? ''
+                            : ` at ${formatClock(result.anchoredAt)}`
+                        }${
+                          result.resetsAt === undefined
+                            ? ''
+                            : `, resetting at ${formatClock(result.resetsAt)}`
+                        }.`}
+                      </p>
+                    ) : null}
+                    {result && !result.ok ? (
+                      <div className="cd-note cd-note--error" role="alert">
+                        <Icon name="alert-octagon" />
+                        <span className="cd-note-body">
+                          <span className="cd-note-title">Anchoring did not run</span>
+                          <span>
+                            {result.error ?? 'The Claude Code CLI did not report why it failed.'}
+                          </span>
+                        </span>
+                      </div>
+                    ) : null}
+                  </div>
+                );
+              })}
+
+              {plan.rationale.length > 0 ? (
+                <>
+                  <hr className="cd-divider" />
+                  <h3 className="cd-h3">Why this plan</h3>
+                  {plan.rationale.map((line, index) => (
+                    <p className="cd-secondary" key={`${index}-${line.slice(0, 24)}`}>
+                      {line}
+                    </p>
+                  ))}
+                </>
+              ) : null}
+            </section>
+          ) : null}
+        </div>
+
+        <div className="cd-stack">
+          {chartProfile ? (
+            <ChartFrame
+              title="What your day usually costs"
+              subtitle="Utilization gained per local hour, learned from recorded usage. The band is your declared peak."
+              height={220}
+              tableRows={hourProfileTable(chartProfile, governing.peak) ?? undefined}
+            >
+              <HourProfile profile={chartProfile} peak={governing.peak} height={220} />
+            </ChartFrame>
+          ) : anchors === null ? (
+            <p className="cd-view-loading" role="status" aria-live="polite">
+              <Icon name="refresh" className="cd-spin" />
+              Loading the hourly profile…
+            </p>
+          ) : (
+            <EmptyState
+              icon="activity"
+              title="No hourly profile yet"
+              description="ClaudeDeck learns this from recorded usage. Keep it polling and the curve fills in."
+            />
+          )}
+
+          <section className="cd-card" aria-labelledby="cd-pl-switch">
+            <div className="cd-card-head">
+              <Icon name="settings" />
+              <h2 className="cd-h2" id="cd-pl-switch">
+                Planner
+              </h2>
+            </div>
+            <Toggle
+              checked={cfg.enabled}
+              onChange={(next) => void setEnabled(next)}
+              label="Plan my session windows"
+              description={`Peak minutes count ${cfg.peakWeight}x a normal working minute when scoring a plan. Reminders ${
+                cfg.remind ? `arrive ${cfg.remindLeadMin} minutes before an anchor` : 'are off'
+              }; automatic anchoring is ${cfg.autoAnchor ? 'on' : 'off'}.`}
+            />
+          </section>
+        </div>
+      </div>
+
+      <section className="cd-card" aria-labelledby="cd-pl-hours">
+        <div className="cd-card-head">
+          <Icon name="clock" />
+          <h2 className="cd-h2" id="cd-pl-hours">
+            Your hours
+          </h2>
+          <span className="cd-spacer" />
+          {cfg.configured ? null : <Badge tone="warning">Defaults, not yours</Badge>}
+        </div>
+
+        <ScheduleEditor
+          value={schedule}
+          onChange={setDraft}
+          disabled={saving}
+          footnote="Times are stored as minutes from local midnight and edited here as HH:MM. The planner only weights the part of your peak that falls inside working hours."
+        />
+
+        {state.settings.safeMode ? (
+          <p className="cd-muted">
+            Safe mode is on, so ClaudeDeck will refuse to write these hours. Turn it off in Settings
+            first.
+          </p>
+        ) : null}
+
+        {saveError ? (
+          <div className="cd-note cd-note--error" role="alert">
+            <Icon name="alert-octagon" />
+            <span className="cd-note-body">
+              <span className="cd-note-title">Your hours were not saved</span>
+              <span>{saveError}</span>
+            </span>
+          </div>
+        ) : null}
+
+        <div className="cd-row">
+          <Button
+            variant="primary"
+            icon="check"
+            busy={saving}
+            disabled={!dirty || problems.length > 0}
+            onClick={() => void saveSchedule()}
+          >
+            Save these hours
+          </Button>
+          {dirty ? (
+            <Button variant="ghost" onClick={() => setDraft(null)} disabled={saving}>
+              Discard changes
+            </Button>
+          ) : null}
+          <span className="cd-spacer" />
+          {savedAt !== null && !dirty ? (
+            <span className="cd-muted">
+              <Icon name="check" size={12} /> {`Saved at ${formatClock(savedAt)}.`}
+            </span>
+          ) : null}
+        </div>
+      </section>
+    </div>
+  );
+}
+
+export default Planner;

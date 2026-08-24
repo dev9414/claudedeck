@@ -29,6 +29,7 @@ import type {
   UsageWindow,
 } from '@shared/types';
 import type { FileStat, FsDeps, RunResult, WriteFileOptions } from '@core/credentials';
+import { DEFAULT_SCHEDULE } from '@core/schedule';
 import type { HistoryFs } from '@core/history';
 import type { LockFs } from '@core/locks';
 import type { FetchLike } from '@core/oauth';
@@ -984,6 +985,16 @@ export function makeSettings(spec: SettingsSpec = {}): Settings {
     historyRetentionDays: 30,
     safeMode: false,
     directoryMappings: [],
+    planner: {
+      enabled: false,
+      configured: false,
+      schedules: [DEFAULT_SCHEDULE],
+      peakWeight: 3,
+      remind: true,
+      remindLeadMin: 10,
+      autoAnchor: false,
+      anchorPrompt: 'hi',
+    },
   };
   // Nested config gets merged rather than replaced, so a test can override one
   // knob (`{ autoswitch: { threshold: 95 } }`) without restating the rest.

@@ -8,7 +8,7 @@
 import { Icon, type IconName } from './Icon';
 import { IconButton } from './Button';
 
-export type ViewId = 'dashboard' | 'accounts' | 'timeline' | 'automation' | 'settings';
+export type ViewId = 'dashboard' | 'accounts' | 'timeline' | 'planner' | 'automation' | 'settings';
 
 export interface NavItem {
   id: ViewId;
@@ -22,6 +22,7 @@ export const NAV_ITEMS: readonly NavItem[] = [
   { id: 'dashboard', label: 'Dashboard', icon: 'layout', hint: 'Live quota for the active account' },
   { id: 'accounts', label: 'Accounts', icon: 'users', hint: 'Add, alias, reorder, and switch accounts' },
   { id: 'timeline', label: 'Timeline', icon: 'activity', hint: 'Usage history and burn rate' },
+  { id: 'planner', label: 'Planner', icon: 'clock', hint: 'Where to start the day so a reset lands where you need it' },
   { id: 'automation', label: 'Automation', icon: 'bolt', hint: 'Auto-switch rules and recent decisions' },
   { id: 'settings', label: 'Settings', icon: 'settings', hint: 'Paths, safety, notifications' },
 ];

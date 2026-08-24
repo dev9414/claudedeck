@@ -57,7 +57,12 @@ const SHOTS = [
   { id: 'timeline', route: 'timeline', theme: 'dark' },
   { id: 'automation', route: 'automation', theme: 'dark' },
   { id: 'settings', route: 'settings', theme: 'light' },
+  { id: 'planner', route: 'planner', theme: 'dark' },
+  { id: 'planner-light', route: 'planner', theme: 'light' },
+  // The wizard only exists before an account is managed, so it cannot be
+  // reached by route -- it gets the fresh-install launch instead.
   { id: 'onboarding', route: 'dashboard', theme: 'dark', firstRun: true },
+  { id: 'onboarding-hours', route: 'dashboard', theme: 'dark', firstRun: true, step: 2 },
 ];
 
 function flag(name, fallback) {
@@ -208,6 +213,15 @@ async function captureGroup(group, { firstRun }) {
 
     for (const shot of group) {
       await evaluate(`document.documentElement.setAttribute('data-theme', ${JSON.stringify(shot.theme)})`);
+      if (shot.step !== undefined) {
+        // The wizard reads its position from sessionStorage on mount, so seed it
+        // and reload rather than trying to click through the steps.
+        await evaluate(
+          `window.sessionStorage.setItem('claudedeck:onboarding-step', '${shot.step}')`,
+        );
+        await send('Page.reload', { ignoreCache: false });
+        await sleep(2600);
+      }
       await evaluate(`window.location.hash = '#/${shot.route}'`);
       // Let the view mount, its data settle, and entrance motion finish.
       await sleep(1800);

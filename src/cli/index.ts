@@ -19,17 +19,26 @@ import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
 
 import { INVOKE_CHANNELS, type DeckApi, type InvokeChannel } from '../shared/ipc';
+import { FIVE_HOUR_MS } from '../shared/types';
 import type {
   Account,
+  AccountPlan,
+  AnchorResult,
   AutoSwitchEvent,
+  DaySpan,
   DeckState,
   Forecast,
   HistoryPoint,
+  PlannerConfig,
   Result,
+  SessionPlan,
+  Settings,
   SwitchReason,
   SwitchResult,
   SwitchStrategy,
+  UsageProfile,
   UsageWindow,
+  WindowSpan,
 } from '../shared/types';
 import { createServices } from '../main/services';
 import { createDemoServices, isDemoMode } from '../main/demo';
@@ -85,6 +94,7 @@ const VALUE_FLAGS = new Set([
   'token',
   'email',
   'reason',
+  'day',
 ]);
 
 const SHORT_FLAGS: Record<string, string> = {
@@ -1480,6 +1490,477 @@ function exhaustionLabel(forecast: Forecast, now: number): string {
 }
 
 // ---------------------------------------------------------------------------
+// Commands: session window planning
+// ---------------------------------------------------------------------------
+
+/*
+ * The 5-hour window is anchored by the *first message* of a session rather than
+ * by the clock, so when that message lands is the only part of the window a
+ * user controls. `plan` says where to put it and why; `anchor` puts it there by
+ * running the official Claude Code CLI once. Neither raises a limit nor works
+ * around one - they only choose when a window the user already has begins.
+ */
+
+const WEEKDAY_NAMES = [
+  'Sunday',
+  'Monday',
+  'Tuesday',
+  'Wednesday',
+  'Thursday',
+  'Friday',
+  'Saturday',
+] as const;
+
+const WEEKDAY_SHORT = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'] as const;
+
+const DAY_PATTERN = /^(\d{4})-(\d{2})-(\d{2})$/;
+
+/** `--day`, or the first positional, as a local `YYYY-MM-DD`. */
+function readDay(args: ParsedArgs): string | undefined {
+  const raw = flagStr(args, 'day') ?? args.positionals[0];
+  if (raw === undefined) return undefined;
+  const day = raw.trim();
+  const match = DAY_PATTERN.exec(day);
+  if (match !== null) {
+    const year = Number(match[1]);
+    const month = Number(match[2]);
+    const date = Number(match[3]);
+    // `new Date` rolls 2026-02-30 forward into March instead of rejecting it,
+    // and so does `Date.parse` for anything but a bare ISO day, so the
+    // round-trip is what actually catches a well-formed impossible day. Noon,
+    // because the day is local and midnight is the one instant a DST change can
+    // push onto the day before.
+    const probe = new Date(year, month - 1, date, 12);
+    if (probe.getFullYear() === year && probe.getMonth() === month - 1 && probe.getDate() === date) {
+      return day;
+    }
+  }
+  throw new CliError(`expected a day as YYYY-MM-DD, got "${raw}"`);
+}
+
+/** Local weekday name of a `YYYY-MM-DD` key. */
+function weekdayOf(day: string): string {
+  const at = Date.parse(`${day}T12:00:00`);
+  if (Number.isNaN(at)) return '';
+  return WEEKDAY_NAMES[new Date(at).getDay()] ?? '';
+}
+
+/** Minutes from local midnight as `HH:MM`. */
+function formatMinuteOfDay(minute: number): string {
+  if (!Number.isFinite(minute)) return '--:--';
+  const m = ((Math.round(minute) % 1440) + 1440) % 1440;
+  return `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
+}
+
+/** An instant as a bare local `HH:MM`. The date is stated once, in the header. */
+function formatTimeOfDay(epochMs: number): string {
+  if (!Number.isFinite(epochMs)) return '--:--';
+  const d = new Date(epochMs);
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+}
+
+/**
+ * Whole minutes. Distinct from `formatDuration` because a plan that blocks
+ * nothing has to read `0m`, and `formatDuration(0)` says `now`.
+ */
+function formatMins(minutes: number): string {
+  if (!Number.isFinite(minutes)) return '--';
+  const total = Math.max(0, Math.round(minutes));
+  if (total < 60) return `${total}m`;
+  const hours = Math.floor(total / 60);
+  const rest = total % 60;
+  return rest === 0 ? `${hours}h` : `${hours}h ${rest}m`;
+}
+
+/** Past or future, so a plan read at noon says what has already happened. */
+function formatWhen(at: number, now: number): string {
+  if (!Number.isFinite(at)) return '--';
+  if (at > now) return `in ${formatDuration(at - now)}`;
+  const ago = formatDuration(now - at);
+  return ago === 'now' ? 'now' : `${ago} ago`;
+}
+
+function spanText(span: DaySpan): string {
+  return `${formatMinuteOfDay(span.start)}-${formatMinuteOfDay(span.end)}`;
+}
+
+/**
+ * `Settings.planner` is not optional in the contract, but a `settings.json`
+ * written before the planner existed carries no such block, so what arrives at
+ * runtime is checked rather than trusted.
+ */
+function plannerConfig(settings: Settings): PlannerConfig | undefined {
+  const raw = settings.planner as PlannerConfig | undefined;
+  return isRecord(raw) ? raw : undefined;
+}
+
+/** The configured throwaway prompt, or null when this build has no planner config. */
+function anchorPromptOf(settings: Settings): string | null {
+  const prompt = plannerConfig(settings)?.anchorPrompt;
+  return typeof prompt === 'string' && prompt.trim().length > 0 ? prompt : null;
+}
+
+/**
+ * The planner methods landed after the first service layer, so a main process
+ * built without them is a real possibility. Checked per command rather than in
+ * `REQUIRED_METHODS`, so a services object that predates the planner still runs
+ * `list` and `switch` instead of refusing to start at all.
+ */
+function requirePlannerMethod(services: CliServices, name: 'getSessionPlan' | 'anchorNow'): void {
+  const holder = services.api as unknown as Record<string, unknown>;
+  if (typeof holder[name] !== 'function') {
+    throw new CliError(
+      `this build of the service layer has no ${name}() - session window planning is unavailable here`,
+      { code: 'contract-drift' },
+    );
+  }
+}
+
+/**
+ * Blocked minutes charged to one account's own windows. Deliberately not
+ * `outcome.blockedWorkMin`: being blocked is a property of the whole fleet, so
+ * every account reports the same total there and a column of it would read as
+ * one stall per account.
+ */
+function stalledMin(windows: readonly WindowSpan[]): number {
+  let total = 0;
+  for (const window of windows) {
+    if (Number.isFinite(window.blockedMin)) total += window.blockedMin;
+  }
+  return total;
+}
+
+/** The first two resets, which is as far ahead as one anchor decision reaches. */
+function resetsText(plan: AccountPlan): string {
+  const resets = plan.outcome.windows.slice(0, 2).map((window) => formatTimeOfDay(window.end));
+  return resets.length === 0 ? '--' : resets.join(', ');
+}
+
+function profileText(profile: UsageProfile): string {
+  const samples = Array.isArray(profile.samples) ? profile.samples : [];
+  const observed = samples.filter((count) => Number.isFinite(count) && count > 0).length;
+  const days = (Array.isArray(profile.days) ? profile.days : [])
+    .map((day) => WEEKDAY_SHORT[day] ?? '?')
+    .join(' ');
+  const parts = [
+    `confidence ${confidenceLabel(profile.confidence)}`,
+    `${observed} of 24 hours observed`,
+  ];
+  if (days.length > 0) parts.push(days);
+  return parts.join('   ');
+}
+
+/**
+ * True when the recommendation is just "start when you start". The planner
+ * returns the baseline anchor for every account when nothing beats it, and that
+ * deserves to be said plainly rather than dressed up as advice.
+ */
+function isBaselinePlan(plan: SessionPlan): boolean {
+  return (
+    plan.accounts.length > 0 &&
+    plan.accounts.every((account) => account.outcome.anchorAt === plan.baseline.anchorAt)
+  );
+}
+
+/** The `SessionPlan`, with `alias` null rather than absent like every other document. */
+function planJson(plan: SessionPlan): Record<string, unknown> {
+  return {
+    day: plan.day,
+    schedule: plan.schedule,
+    profile: plan.profile,
+    accounts: plan.accounts.map((account) => ({
+      slot: account.slot,
+      email: account.email,
+      alias: account.alias ?? null,
+      outcome: account.outcome,
+      note: account.note,
+    })),
+    baseline: plan.baseline,
+    peakMinutesSaved: plan.peakMinutesSaved,
+    rationale: plan.rationale,
+    lowConfidence: plan.lowConfidence,
+    usingDefaultSchedule: plan.usingDefaultSchedule,
+  };
+}
+
+async function cmdPlan(services: CliServices, args: ParsedArgs): Promise<number> {
+  assertFlags(args, ['day']);
+  requirePlannerMethod(services, 'getSessionPlan');
+  const json = flagBool(args, 'json');
+  const now = Date.now();
+  const day = readDay(args);
+
+  // No usage refresh: the plan comes from recorded history and the declared
+  // schedule, exactly like `forecast`, so a live poll would change nothing.
+  const state = await services.api.getState();
+  const plan = unwrap(await services.api.getSessionPlan(day));
+  const planner = plannerConfig(state.settings);
+
+  // Both caveats also appear inside `rationale`, but that list is capped, so
+  // the caveat that matters most can be the one that falls off the end of it.
+  const warnings: string[] = [];
+  if (plan.usingDefaultSchedule) {
+    warnings.push('planned against the default hours ClaudeDeck invented, not hours you confirmed');
+  }
+  if (plan.lowConfidence) {
+    warnings.push('recorded history is too thin for this plan to be worth acting on yet');
+  }
+  if (planner !== undefined && !planner.enabled) {
+    warnings.push('the planner is switched off in settings; this is what it would advise if it were on');
+  }
+
+  if (json) {
+    emitJson('plan', {
+      ok: true,
+      day: plan.day,
+      isBaseline: isBaselinePlan(plan),
+      plan: planJson(plan),
+      warnings,
+    });
+    for (const problem of warnings) warn(problem);
+    return EXIT.ok;
+  }
+
+  // Every outcome carries the same fleet-wide blocked minutes, so any one of
+  // them will do; with no accounts at all the baseline is the only one there is.
+  const planned = plan.accounts[0]?.outcome ?? plan.baseline;
+
+  const head: [string, string][] = [];
+  head.push(['day', `${plan.day}  ${weekdayOf(plan.day)}`]);
+  head.push([
+    'schedule',
+    `${plan.schedule.label}   work ${spanText(plan.schedule.work)}   peak ${spanText(plan.schedule.peak)}`,
+  ]);
+  head.push(['profile', profileText(plan.profile)]);
+  head.push([
+    'blocked',
+    `${formatMins(planned.blockedWorkMin)} of working hours, ${formatMins(planned.blockedPeakMin)} of peak   ` +
+      paint(
+        `(unanchored: ${formatMins(plan.baseline.blockedWorkMin)} / ${formatMins(plan.baseline.blockedPeakMin)})`,
+        'dim',
+      ),
+  ]);
+  if (plan.peakMinutesSaved > 0) {
+    head.push(['saved', paint(`${formatMins(plan.peakMinutesSaved)} of peak time`, 'green')]);
+  }
+  const peakWeight = planner?.peakWeight;
+  head.push([
+    'cost',
+    typeof peakWeight === 'number'
+      ? `${planned.cost}   ${paint(`(a blocked peak minute counts ${peakWeight}x)`, 'dim')}`
+      : String(planned.cost),
+  ]);
+
+  const keyWidth = head.reduce((width, [key]) => Math.max(width, key.length), 0);
+  for (const [key, value] of head) out(`${paint(padCell(key, keyWidth, 'left'), 'dim')}  ${value}`);
+
+  if (plan.accounts.length > 0) {
+    out('');
+    const columns: Column[] = [
+      { header: '' },
+      { header: 'SLOT', align: 'right' },
+      { header: 'ACCOUNT' },
+      { header: 'ANCHOR' },
+      { header: 'WHEN' },
+      { header: 'RESETS' },
+      { header: 'STALL', align: 'right' },
+    ];
+    const live = new Map(state.accounts.map((account) => [account.slot, account] as const));
+    const rows = plan.accounts.map((account) => [
+      live.get(account.slot)?.active === true ? paint(ACTIVE_MARK, 'green') : ' ',
+      String(account.slot),
+      account.alias ?? account.email,
+      formatTimeOfDay(account.outcome.anchorAt),
+      paint(formatWhen(account.outcome.anchorAt, now), 'dim'),
+      resetsText(account),
+      formatMins(stalledMin(account.outcome.windows)),
+    ]);
+    for (const line of renderTable(columns, rows)) out(line);
+  }
+
+  out('');
+  for (const line of plan.rationale) out(line);
+  // One line per account, because `rationale` only speaks for the first two.
+  for (const account of plan.accounts) {
+    out(paint(`  slot ${account.slot}  ${account.note}`, 'dim'));
+  }
+
+  if (plan.accounts.length === 0) {
+    note('add an account with "claudedeck add" and the planner has something to place');
+  } else if (isBaselinePlan(plan)) {
+    note(paint('nothing to anchor deliberately today - starting when you start is already best', 'dim'));
+  } else {
+    const byAnchor = [...plan.accounts].sort((a, b) => a.outcome.anchorAt - b.outcome.anchorAt);
+    const next = byAnchor.find((account) => account.outcome.anchorAt >= now) ?? byAnchor[0];
+    if (next !== undefined) note(paint(`place it with: claudedeck anchor ${next.slot}`, 'dim'));
+  }
+  if (state.demoMode) note(paint('demo mode: these are synthetic fixtures', 'cyan'));
+  for (const problem of warnings) warn(problem);
+  return EXIT.ok;
+}
+
+async function cmdAnchor(services: CliServices, args: ParsedArgs): Promise<number> {
+  assertFlags(args, ['dry-run', 'slot']);
+  requirePlannerMethod(services, 'anchorNow');
+  const json = flagBool(args, 'json');
+  const dryRun = flagBool(args, 'dry-run');
+
+  const raw = args.positionals[0] ?? flagStr(args, 'slot');
+  // No implicit target: this is the one command that spends quota, so it never
+  // guesses which account to spend it on.
+  if (raw === undefined) {
+    throw new CliError('usage: claudedeck anchor <slot|email|alias> [--dry-run]');
+  }
+
+  const before = await services.api.getState();
+  const target = resolveTarget(before.accounts, raw);
+  // A current reset instant is the whole basis of the "already anchored" test,
+  // so the poll happens before the decision rather than after it.
+  const problems = await refreshQuietly(services.api, target.slot);
+  const state = await services.api.getState();
+  const account = state.accounts.find((a) => a.slot === target.slot) ?? target;
+  const now = Date.now();
+  const label = `slot ${account.slot} (${account.email})`;
+
+  /** One shape for every outcome, so a script can branch on `action`. */
+  const finishAnchor = (action: string, body: Record<string, unknown>, exitCode: number): number => {
+    if (json) {
+      emitJson('anchor', {
+        ok: exitCode !== EXIT.error,
+        action,
+        dryRun,
+        slot: account.slot,
+        email: account.email,
+        alias: account.alias ?? null,
+        warnings: problems,
+        // Always present, so a consumer can read `error` without knowing which
+        // outcome it got. Overridden by `body` on the failing path.
+        error: null,
+        ...body,
+        exitCode,
+      });
+    }
+    for (const problem of problems) warn(problem);
+    return exitCode;
+  };
+
+  if (account.quarantinedAt !== undefined) {
+    throw new CliError(
+      `${label} is quarantined (${account.quarantineReason ?? 'its refresh token was rejected'}) - fix that login first`,
+      { code: 'quarantined' },
+    );
+  }
+
+  // An API key has no subscription window, so there is no anchor to place and
+  // nothing a first message could move.
+  if (account.kind === 'api-key' || account.usageStatus === 'no-quota') {
+    const message = `${label} has no 5-hour subscription window to anchor`;
+    if (!json) note(message);
+    return finishAnchor('no-quota', { message, anchoredAt: null, resetsAt: null }, EXIT.nothingToDo);
+  }
+
+  // The live anchor is observable rather than assumed: anchorAt = resetsAt - 5h.
+  // A reset still in the future means a window is already open, and no second
+  // message can move an anchor that has already been placed - so this is
+  // genuinely nothing to do rather than a failure. Sound even from a stale
+  // snapshot: a reset instant in the future is still in the future.
+  const { snapshot, stale } = latestUsage(account, now);
+  const reported = snapshot?.fiveHour?.resetsAt;
+  const liveReset = reported === undefined ? Number.NaN : Date.parse(reported);
+  if (!Number.isNaN(liveReset) && liveReset > now) {
+    const anchoredAt = liveReset - FIVE_HOUR_MS;
+    const message =
+      `${label} is already anchored at ${formatTimeOfDay(anchoredAt)} - ` +
+      `its window resets ${formatTimeOfDay(liveReset)} (in ${formatDuration(liveReset - now)})`;
+    if (!json) {
+      out(message);
+      note(paint('anchoring again would spend quota without moving anything', 'dim'));
+    }
+    if (stale) warn('that reset time comes from a stale snapshot');
+    return finishAnchor(
+      'already-anchored',
+      { message, anchoredAt, resetsAt: liveReset },
+      EXIT.nothingToDo,
+    );
+  }
+
+  const prompt = anchorPromptOf(state.settings);
+
+  if (dryRun) {
+    const wouldResetAt = now + FIVE_HOUR_MS;
+    const message = `would anchor ${label} by running the Claude Code CLI once`;
+    if (!json) {
+      out(message);
+      const rows: [string, string][] = [
+        ['runs', 'the official claude CLI, once, with the planner throwaway prompt'],
+        ['prompt', prompt === null ? paint('not configured in this build', 'dim') : `"${prompt}"`],
+        ['opens', `a 5-hour window, resetting about ${formatTimeOfDay(wouldResetAt)}`],
+        ['costs', 'a few tokens of quota from that account - no limit is raised or bypassed'],
+      ];
+      const width = rows.reduce((max, [key]) => Math.max(max, key.length), 0);
+      for (const [key, value] of rows) {
+        out(`  ${paint(padCell(key, width, 'left'), 'dim')}  ${value}`);
+      }
+      note(paint('nothing was run', 'dim'));
+    }
+    // Both are refusals or side effects the user should hear about before the
+    // run, not after: the service switches the login itself, and safe mode
+    // stops the whole thing.
+    if (!account.active) {
+      warn(`${label} is not active, so anchoring it switches your login to it first`);
+    }
+    if (state.settings.safeMode) {
+      warn('safe mode is on, so a real run would be refused before anything was sent');
+    }
+    return finishAnchor(
+      'would-anchor',
+      { message, prompt, anchoredAt: null, resetsAt: null, wouldResetAt },
+      EXIT.ok,
+    );
+  }
+
+  const result: AnchorResult = await services.api.anchorNow(account.slot);
+  if (!result.ok) {
+    const message = result.error ?? 'anchoring failed';
+    if (!json) fail(message);
+    return finishAnchor(
+      'failed',
+      { message, error: message, prompt, anchoredAt: null, resetsAt: null },
+      EXIT.error,
+    );
+  }
+
+  // The window length is the window's identity, so a reset the service did not
+  // report is derived from the anchor it did - and labelled as approximate.
+  const derivedReset =
+    result.resetsAt ??
+    (result.anchoredAt === undefined ? undefined : result.anchoredAt + FIVE_HOUR_MS);
+  const at = result.anchoredAt === undefined ? '' : ` at ${formatTimeOfDay(result.anchoredAt)}`;
+  const resets =
+    derivedReset === undefined
+      ? ''
+      : ` - the window ${result.resetsAt === undefined ? 'should reset about' : 'resets'} ${formatTimeOfDay(derivedReset)}`;
+  const message = `anchored ${label}${at}${resets}`;
+  if (!json) {
+    out(message);
+    // `AnchorResult.command` is documented as never containing a token.
+    if (result.command !== undefined) out(paint(`  ran ${result.command}`, 'dim'));
+  }
+  return finishAnchor(
+    'anchored',
+    {
+      message,
+      prompt,
+      anchoredAt: result.anchoredAt ?? null,
+      resetsAt: result.resetsAt ?? null,
+      windowEndsAt: derivedReset ?? null,
+      ranCommand: result.command ?? null,
+    },
+    EXIT.ok,
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Commands: transfer
 // ---------------------------------------------------------------------------
 
@@ -1635,6 +2116,8 @@ const GENERAL_HELP = [
   '  auto                      run the rotation rule; --once evaluates and exits',
   '  history                   recorded utilization points',
   '  forecast                  burn rate and projected exhaustion',
+  '  plan                      where to place a 5-hour anchor, and what it saves',
+  '  anchor <target>           open a 5-hour window now (spends a little quota)',
   '  export [--full]           write a transfer payload to stdout',
   '  import <file>             read a transfer payload (use - for stdin)',
   '  gui                       open the desktop window',
@@ -1648,7 +2131,7 @@ const GENERAL_HELP = [
   '  -h, --help      help for a command',
   '  -v, --version   print the version',
   '',
-  'EXIT CODES for switch and auto --once',
+  'EXIT CODES for switch, auto --once and anchor',
   '  0 switched    1 error    2 nothing to do    3 no viable target',
   '',
   'EXAMPLES',
@@ -1656,6 +2139,8 @@ const GENERAL_HELP = [
   '  claudedeck switch --strategy best --dry-run',
   '  claudedeck auto --once --threshold 85',
   '  claudedeck history --slot 2 --since 7d --json',
+  '  claudedeck plan --day 2026-08-24',
+  '  claudedeck anchor 2 --dry-run',
 ];
 
 const COMMAND_HELP: Record<string, readonly string[]> = {
@@ -1686,6 +2171,21 @@ const COMMAND_HELP: Record<string, readonly string[]> = {
     '  --since accepts 30m, 12h, 7d, 2w, an ISO date, or epoch ms. Default 24h.',
   ],
   forecast: ['claudedeck forecast [--slot N] [--json]', '  Burn rate, pace, and projected exhaustion per window.'],
+  plan: [
+    'claudedeck plan [--day YYYY-MM-DD] [--json]',
+    '  Where to place a 5-hour anchor for each account on a local day, what it',
+    '  costs in blocked minutes, and the reasoning. Defaults to today.',
+    '  Read-only: it sends no message and writes nothing.',
+  ],
+  anchor: [
+    'claudedeck anchor <target> [--dry-run] [--json]',
+    '  Opens a 5-hour window now by running the Claude Code CLI once with a',
+    '  throwaway prompt, which spends a little of the quota on that account. It',
+    '  schedules when your window starts; it raises no limit and bypasses none.',
+    '  --dry-run, -n reports what it would run and runs nothing.',
+    '  Exits 0 anchored, 1 failed, 2 nothing to do - already anchored, or the',
+    '  account has no 5-hour subscription window.',
+  ],
   export: [
     'claudedeck export [--slot N] [--full] [--force] [--json]',
     '  --full includes credentials; it refuses to print to a terminal without --force.',
@@ -1716,7 +2216,13 @@ const ALIASES: Record<string, string> = {
   '--version': 'version',
 };
 
-/** Commands that must not pay the cost of booting the service layer. */
+/**
+ * Commands that must not pay the cost of booting the service layer.
+ *
+ * `plan` and `anchor` are deliberately absent: the plan comes from recorded
+ * history through the services, and the anchor is placed by them, so both need
+ * the vault open and the Electron escalation that goes with it.
+ */
 const OFFLINE_COMMANDS = new Set(['help', 'version', 'gui']);
 
 /**
@@ -1824,6 +2330,10 @@ async function run(argv: readonly string[]): Promise<number> {
         return await cmdHistory(services, args);
       case 'forecast':
         return await cmdForecast(services, args);
+      case 'plan':
+        return await cmdPlan(services, args);
+      case 'anchor':
+        return await cmdAnchor(services, args);
       case 'export':
         return await cmdExport(services, args);
       case 'import':
