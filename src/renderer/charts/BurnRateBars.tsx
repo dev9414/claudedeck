@@ -84,7 +84,6 @@ export function BurnRateBars({ rows, lowConfidence = 0.5, className }: BurnRateB
     );
   }
 
-  const anyLow = prepared.some((row) => row.low);
 
   return (
     <div className={cx('cd-burn', className)}>
@@ -116,8 +115,9 @@ export function BurnRateBars({ rows, lowConfidence = 0.5, className }: BurnRateB
         })}
       </ul>
       <p className="cd-burn-foot">
+        {/* Each low-confidence row already carries its own labelled chip, so
+            repeating the explanation here was a second sentence for one fact. */}
         {`Scale 0 to ${formatPct(scaleMax, 1)} per hour.`}
-        {anyLow ? ' Faded bars are fitted from too few samples to trust.' : ''}
       </p>
       <ChartTableFallback table={table} />
     </div>

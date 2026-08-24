@@ -318,7 +318,7 @@ export function Timeline() {
       <header className="cd-view-head">
         <h1 className="cd-h1">Timeline</h1>
         <p className="cd-view-sub">
-          Recorded utilization per account. ClaudeDeck keeps {state.settings.historyRetentionDays} days of points.
+          Recorded utilization per account.
         </p>
         <span className="cd-spacer" />
         {state.demoMode ? <Badge tone="info">Demo data</Badge> : null}
@@ -396,7 +396,7 @@ export function Timeline() {
             <EmptyState
               icon="activity"
               title={`Nothing recorded for the ${windowLabel} window in this range`}
-              description="A point is written every time ClaudeDeck polls usage. Widen the range, pick another window, or refresh usage from the title bar to start the record."
+              description="A point is written each time ClaudeDeck polls. Widen the range, or refresh from the title bar."
             />
           ) : (
             <ChartFrame
@@ -405,17 +405,17 @@ export function Timeline() {
                   ? `${windowLabel} utilization — ${series[0]?.alias ?? series[0]?.email ?? 'one account'}`
                   : `${windowLabel} utilization`
               }
-              subtitle={`${rangeLabel} · percent of the window used${
-                coneForecasts.length > 0 ? ' · dashed cone is a projection, not a measurement' : ''
-              }`}
+              // The legend already marks the cone "estimate"; repeating it here
+              // spent a line saying what the chart says about itself.
+              subtitle={`${rangeLabel} · percent of the window used`}
               tableRows={tableRows}
-              height={380}
+              height={520}
             >
               <UsageTimeline
                 series={series}
                 windowKey={windowKey}
                 forecasts={coneForecasts}
-                height={380}
+                height={520}
               />
             </ChartFrame>
           )}
@@ -431,13 +431,17 @@ export function Timeline() {
             <EmptyState
               icon="info"
               title="No burn rate for this window yet"
-              description="A rate needs at least two observations inside the same window. Keep ClaudeDeck polling and this fills in."
+              description="A rate needs two readings in the same window. This fills in as ClaudeDeck polls."
             />
           ) : (
             <ChartFrame
               title={`Burn rate — ${windowLabel}`}
-              subtitle="Utilization points consumed per hour, fitted over recent history."
+              subtitle="Points consumed per hour, fitted over recent history."
               tableRows={burnTable}
+              // ChartFrame's 220px default is sized for a plot; a short list of
+              // bars left most of the card empty. One row per account plus the
+              // scale note is all the room this needs.
+              height={Math.max(84, burnRows.length * 38 + 24)}
             >
               <BurnRateBars rows={burnRows} />
             </ChartFrame>

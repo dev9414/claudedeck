@@ -234,6 +234,19 @@ function medianGap(points: readonly TimelinePoint[]): number {
 // Component
 // ---------------------------------------------------------------------------
 
+/**
+ * A name that fits the label gutter.
+ *
+ * These labels used to render the series' full identity, so an email became
+ * "linus@example…" — an ellipsis where the useful part was. The local part is
+ * what distinguishes accounts in practice, and the legend above still carries
+ * the full name for anyone who needs it.
+ */
+function shortSeriesName(name: string): string {
+  const local = name.includes('@') ? (name.split('@')[0] ?? name) : name;
+  return local.length > 12 ? `${local.slice(0, 11)}…` : local;
+}
+
 export function UsageTimeline({
   series,
   windowKey,
@@ -276,7 +289,26 @@ export function UsageTimeline({
 
   const projections = useMemo<Projection[]>(() => {
     if (forecastBySeries.size === 0) return [];
-    const horizonMs = Math.max(0.25, projectionHours) * MS_PER_HOUR;
+    // Capped at a tenth of the observed span, for two reasons. The subtitle
+    // says "24 hours"; a 6-hour projection on top of it made the axis span 30,
+    // which is the chart contradicting its own label. And a cone is an estimate
+    // -- when it is the largest shape on screen it out-shouts the measurements
+    // it is drawn beside, which is backwards for something fitted from two
+    // samples at 20% confidence.
+    const observedSpanMs = (() => {
+      let lo = Number.POSITIVE_INFINITY;
+      let hi = Number.NEGATIVE_INFINITY;
+      for (const entry of drawn) {
+        for (const point of entry.points) {
+          if (point.t < lo) lo = point.t;
+          if (point.t > hi) hi = point.t;
+        }
+      }
+      return Number.isFinite(lo) && Number.isFinite(hi) ? Math.max(0, hi - lo) : 0;
+    })();
+    const requestedMs = Math.max(0.25, projectionHours) * MS_PER_HOUR;
+    const horizonMs =
+      observedSpanMs > 0 ? Math.min(requestedMs, observedSpanMs * 0.1) : requestedMs;
     const out: Projection[] = [];
     for (const entry of drawn) {
       const forecast = forecastBySeries.get(entry.key);
@@ -308,9 +340,13 @@ export function UsageTimeline({
         seriesKey: entry.key,
         color: entry.color,
         from: anchor,
-        to: { t: end, pct: anchor.pct + pctPerHour * hours },
-        upper: anchor.pct + pctPerHour * hours * (1 + spread),
-        lower: anchor.pct + pctPerHour * hours * (1 - spread),
+        to: { t: end, pct: Math.min(100, anchor.pct + pctPerHour * hours) },
+        // Clamped to the axis. Utilization over 100% does not exist -- that is
+        // the point at which nothing more can be sent -- so a cone drawn above
+        // it would be claiming something impossible and would need the axis
+        // stretched to show it.
+        upper: Math.min(100, anchor.pct + pctPerHour * hours * (1 + spread)),
+        lower: Math.max(0, anchor.pct + pctPerHour * hours * (1 - spread)),
         pctPerHour,
         confidence,
       });
@@ -331,12 +367,17 @@ export function UsageTimeline({
   const projectionEnd = projections.reduce((max, projection) => Math.max(max, projection.to.t), lastTime);
   const spanMs = Math.max(0, projectionEnd - firstTime);
 
+  // Only *observations* set the scale. A low-confidence fit fans out by up to
+  // +/-90%, so letting the cone's upper bound into this pushed the axis past
+  // 100% and squashed every real reading into the lower half of the plot -- an
+  // estimate rescaling the measurements it is drawn beside. The cone is clamped
+  // to the axis instead (see `coneTop`); above 100% it means nothing anyway,
+  // because 100% is where you stop being able to send anything.
   const peak = useMemo(() => {
     let max = 0;
     for (const entry of drawn) for (const point of entry.points) max = Math.max(max, point.pct);
-    for (const projection of projections) max = Math.max(max, projection.to.pct, projection.upper);
     return max;
-  }, [drawn, projections]);
+  }, [drawn]);
   const yMax = Math.max(100, Math.ceil(peak / 10) * 10);
 
   const x = timeScale([firstTime, projectionEnd], [padding.left, padding.left + plotWidth]);
@@ -573,7 +614,7 @@ export function UsageTimeline({
                 key={`cone-${projection.seriesKey}`}
                 className="cd-cone"
                 points={`${x0},${y.map(projection.from.pct)} ${x1},${y.map(projection.upper)} ${x1},${y.map(projection.lower)}`}
-                style={{ fill: seriesWash(projection.color, 14) }}
+                style={{ fill: seriesWash(projection.color, 9) }}
               />
             );
           })}
@@ -649,7 +690,7 @@ export function UsageTimeline({
                     style={{ fill: label.color }}
                   />
                   <text className="cd-direct-label" x={padding.left + plotWidth + 18} y={label.y}>
-                    {label.name.length > 14 ? `${label.name.slice(0, 13)}…` : label.name}
+                    {shortSeriesName(label.name)}
                   </text>
                 </g>
               ))
