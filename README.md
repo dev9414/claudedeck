@@ -65,7 +65,7 @@ situation legible before it bites:
 
 | Planner | Declaring your hours |
 |---|---|
-| <img src="assets/screenshots/planner-light.png" alt="Planner view in light mode: the day window by window, with recommended first-message times and the learned hourly usage profile"> | <img src="assets/screenshots/onboarding-hours.png" alt="Onboarding step three: picking the weekdays, working hours and peak hours the planner should optimise against"> |
+| <img src="assets/screenshots/planner-light.png" alt="Planner view in light mode: the day window by window, with recommended first-message times and the learned hourly usage profile"> | <img src="assets/screenshots/planner-hours.png" alt="The hours dialog: weekday chips, working and peak hours, and a strip showing the declared day"> |
 
 ---
 
@@ -168,6 +168,10 @@ Your hours are **declared, not inferred** — ClaudeDeck learns *when you burn
 quota*, but only you know *when it matters*. A burst of 3am activity might be the
 one night you were firefighting. So the planner stays off until you set them, and
 says plainly when it is running on defaults you never confirmed.
+
+You are asked for them during setup, and they stay one click from the Planner:
+
+<img src="assets/screenshots/onboarding-hours.png" width="560" alt="Onboarding step three: weekday chips, working hours and peak hours, with a strip showing the declared day">
 
 The mechanic, the maths, and an honest account of how wrong the numbers can be:
 **[docs/SESSION-PLANNER.md](docs/SESSION-PLANNER.md)**.

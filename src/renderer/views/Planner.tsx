@@ -32,6 +32,7 @@ import { Badge } from '../components/Badge';
 import { Button } from '../components/Button';
 import { EmptyState } from '../components/EmptyState';
 import { Icon } from '../components/Icon';
+import { Modal } from '../components/Modal';
 import { ScheduleEditor } from '../components/ScheduleEditor';
 import { Toggle } from '../components/Toggle';
 import { ChartFrame, useNow } from '../charts/ChartFrame';
@@ -147,6 +148,9 @@ export function Planner() {
   const [confirming, setConfirming] = useState<number | null>(null);
   const [busySlot, setBusySlot] = useState<number | null>(null);
   const [anchorResults, setAnchorResults] = useState<Record<number, AnchorResult>>({});
+  // Declared with the rest of the state: this sits above two early returns,
+  // and a hook below them changes the hook count between renders.
+  const [hoursOpen, setHoursOpen] = useState(false);
 
   // Every poll can move the plan, and so can any change to the hours it is
   // scored against; those two things are the whole trigger for a re-plan.
@@ -284,6 +288,43 @@ export function Planner() {
   // about an invented day rather than a finding about this one.
   const observedHours = (plan?.profile.samples ?? []).filter((count) => count > 0).length;
 
+
+  /**
+   * The one-line answer, chosen so the page opens with what to do rather than
+   * with why it matters. Order is deliberate: a missing input beats a missing
+   * measurement beats a real recommendation, because that is the order in which
+   * the user can act on them.
+   */
+  const headline = ((): { text: string; sub?: string } => {
+    if (planLoading && !plan) return { text: 'Working out today’s plan…' };
+    if (!plan) return { text: 'No plan yet.', sub: 'Set your hours and ClaudeDeck will work one out.' };
+    if (!cfg.configured) {
+      return {
+        text: 'Tell ClaudeDeck when your day matters.',
+        sub: 'It is planning against default hours right now, so treat the times below as a placeholder.',
+      };
+    }
+    if (observedHours === 0) {
+      return {
+        text: 'Nothing to recommend yet — no usage recorded.',
+        sub: 'Leave ClaudeDeck running through a working day and this becomes a real answer.',
+      };
+    }
+    const first = plan.accounts[0];
+    if (!first) return { text: 'No account to plan for.', sub: 'Add an account and come back.' };
+    if (plan.peakMinutesSaved <= 0) {
+      return {
+        text: 'Just start when you start.',
+        sub: 'No start time beats any other today, so there is nothing to plan around.',
+      };
+    }
+    const reset = first.outcome.windows[0]?.end ?? first.outcome.anchorAt + FIVE_HOUR_MS;
+    return {
+      text: `Send your first message at ${formatClock(first.outcome.anchorAt)}.`,
+      sub: `That puts a reset at ${formatClock(reset)} and keeps ${minutesText(plan.peakMinutesSaved)} of your peak unblocked.`,
+    };
+  })();
+
   const anchorBySlot = new Map((anchors ?? []).map((entry) => [entry.slot, entry]));
   const lanes: WindowPlanLane[] = (plan?.accounts ?? []).map((account) => ({
     slot: account.slot,
@@ -342,24 +383,40 @@ export function Planner() {
         {state.demoMode ? <Badge tone="info">Demo data</Badge> : null}
       </header>
 
-      <section className="cd-card" aria-labelledby="cd-pl-why">
-        <div className="cd-card-head">
-          <Icon name="info" />
-          <h2 className="cd-h2" id="cd-pl-why">
-            Why the start time matters
-          </h2>
+      {/* The answer first. This page used to open with two paragraphs of theory
+          and bury the hours editor at the bottom, which is backwards: the one
+          thing only the user can supply was the hardest thing to find. */}
+      <section className="cd-answer" aria-labelledby="cd-pl-answer">
+        <h2 className="cd-sr-only" id="cd-pl-answer">
+          Today
+        </h2>
+        <p className="cd-answer-line">{headline.text}</p>
+        {headline.sub ? <p className="cd-answer-sub">{headline.sub}</p> : null}
+        <div className="cd-answer-actions">
+          {!cfg.configured ? (
+            <Button variant="primary" icon="clock" onClick={() => setHoursOpen(true)}>
+              Set my hours
+            </Button>
+          ) : (
+            <Button variant="secondary" icon="clock" onClick={() => setHoursOpen(true)}>
+              {`${formatHHMM(governing.work.start)}–${formatHHMM(governing.work.end)}, peak ${formatHHMM(governing.peak.start)}–${formatHHMM(governing.peak.end)}`}
+            </Button>
+          )}
+          <details className="cd-explainer">
+            <summary>How this works</summary>
+            <p>
+              Your 5-hour window starts at your <strong>first message</strong>, not on the clock.
+              Start at 09:00 and resets land 14:00 and 19:00; start at 11:00 and they land 16:00 and
+              21:00.
+            </p>
+            <p>
+              So if a busy stretch would drain a window part-way through, starting earlier makes the
+              reset arrive <em>during</em> it instead of just after. ClaudeDeck simulates your day
+              from recorded usage and picks the start time that blocks you least, weighting your
+              peak hours heaviest.
+            </p>
+          </details>
         </div>
-        <p className="cd-secondary">
-          Claude&apos;s 5-hour quota window starts at your <strong>first message</strong>, not on the
-          clock: send one at 09:00 and your resets land at 14:00 and 19:00, send it at 11:00 and they
-          land at 16:00 and 21:00 instead.
-        </p>
-        <p className="cd-secondary">
-          So if a heavy stretch would drain a window part-way through, starting earlier makes the
-          reset arrive <em>during</em> that stretch instead of just after it — and ClaudeDeck
-          simulates your day against your recorded usage to find the start time that leaves you
-          blocked for the fewest minutes, counting your peak hours heaviest.
-        </p>
       </section>
 
       {error ? (
@@ -428,11 +485,7 @@ export function Planner() {
       {plan ? (
         <ChartFrame
           title="The day, window by window"
-          subtitle={
-            `One lane per account, each split into its 5-hour windows. Boundaries are the resets the ` +
-            `anchor produces. The faint lane at the bottom is the same day with no plan at all. ` +
-            `Every mark is an estimate.`
-          }
+          subtitle="One lane per account. Boundaries are resets; the faint lane is the same day unplanned."
           height={windowPlanHeight(lanes.length, true)}
           tableRows={windowPlanTable({ lanes, baseline: plan.baseline }) ?? undefined}
         >
@@ -485,11 +538,8 @@ export function Planner() {
                   by starting early.
                 </p>
               ) : (
-                <p className="cd-secondary">
-                  Following this plan is predicted to keep{' '}
-                  <strong>{minutesText(plan.peakMinutesSaved)}</strong> of your peak hours unblocked
-                  compared with just starting work at {formatHHMM(governing.work.start)}. That figure
-                  is an estimate from recorded history.
+                <p className="cd-muted">
+                  {`Compared with starting at ${formatHHMM(governing.work.start)}. Estimated, not measured.`}
                 </p>
               )}
 
@@ -648,22 +698,48 @@ export function Planner() {
         </div>
       </div>
 
-      <section className="cd-card" aria-labelledby="cd-pl-hours">
-        <div className="cd-card-head">
-          <Icon name="clock" />
-          <h2 className="cd-h2" id="cd-pl-hours">
-            Your hours
-          </h2>
-          <span className="cd-spacer" />
-          {cfg.configured ? null : <Badge tone="warning">Defaults, not yours</Badge>}
-        </div>
+      {/* The hours live in a dialog reachable from the top of the page, not in a
+          card below three charts. It is the only input the planner cannot derive,
+          so it should never take scrolling to find. */}
+      <Modal
+        open={hoursOpen}
+        onClose={() => setHoursOpen(false)}
+        title="Your hours"
+        description="ClaudeDeck learns when you burn quota. Only you know when it matters."
+        size="md"
+        footer={
+          <>
+            {dirty ? (
+              <Button variant="ghost" onClick={() => setDraft(null)} disabled={saving}>
+                Discard changes
+              </Button>
+            ) : null}
+            <Button variant="ghost" onClick={() => setHoursOpen(false)} disabled={saving}>
+              Close
+            </Button>
+            <Button
+              variant="primary"
+              icon="check"
+              busy={saving}
+              disabled={!dirty || problems.length > 0 || state.settings.safeMode}
+              onClick={() => void saveSchedule()}
+            >
+              Save these hours
+            </Button>
+          </>
+        }
+      >
+        {cfg.configured ? null : (
+          <div className="cd-note cd-note--info">
+            <Icon name="info" />
+            <span className="cd-note-body">
+              <span className="cd-note-title">These are defaults, not your hours</span>
+              <span>Change them and press save, and the plan stops calling itself a guess.</span>
+            </span>
+          </div>
+        )}
 
-        <ScheduleEditor
-          value={schedule}
-          onChange={setDraft}
-          disabled={saving}
-          footnote="Times are stored as minutes from local midnight and edited here as HH:MM. The planner only weights the part of your peak that falls inside working hours."
-        />
+        <ScheduleEditor value={schedule} onChange={setDraft} disabled={saving} showLabel={false} />
 
         {state.settings.safeMode ? (
           <p className="cd-muted">
@@ -681,30 +757,8 @@ export function Planner() {
             </span>
           </div>
         ) : null}
+      </Modal>
 
-        <div className="cd-row">
-          <Button
-            variant="primary"
-            icon="check"
-            busy={saving}
-            disabled={!dirty || problems.length > 0}
-            onClick={() => void saveSchedule()}
-          >
-            Save these hours
-          </Button>
-          {dirty ? (
-            <Button variant="ghost" onClick={() => setDraft(null)} disabled={saving}>
-              Discard changes
-            </Button>
-          ) : null}
-          <span className="cd-spacer" />
-          {savedAt !== null && !dirty ? (
-            <span className="cd-muted">
-              <Icon name="check" size={12} /> {`Saved at ${formatClock(savedAt)}.`}
-            </span>
-          ) : null}
-        </div>
-      </section>
     </div>
   );
 }

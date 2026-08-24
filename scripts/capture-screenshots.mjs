@@ -59,6 +59,10 @@ const SHOTS = [
   { id: 'settings', route: 'settings', theme: 'light' },
   { id: 'planner', route: 'planner', theme: 'dark' },
   { id: 'planner-light', route: 'planner', theme: 'light' },
+  // `click` runs a selector click after the route settles, so a dialog can be
+  // captured without leaving an orphan PNG that `npm run screenshots` cannot
+  // reproduce.
+  { id: 'planner-hours', route: 'planner', theme: 'dark', click: '.cd-answer-actions button' },
   // The wizard only exists before an account is managed, so it cannot be
   // reached by route -- it gets the fresh-install launch instead.
   { id: 'onboarding', route: 'dashboard', theme: 'dark', firstRun: true },
@@ -225,6 +229,13 @@ async function captureGroup(group, { firstRun }) {
       await evaluate(`window.location.hash = '#/${shot.route}'`);
       // Let the view mount, its data settle, and entrance motion finish.
       await sleep(1800);
+      if (shot.click) {
+        const hit = await evaluate(
+          `(() => { const el = document.querySelector(${JSON.stringify(shot.click)}); if (!el) return false; el.click(); return true; })()`,
+        );
+        if (!hit) throw new Error(`${shot.id}: nothing matched ${shot.click}`);
+        await sleep(1200);
+      }
       const { data } = await send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
       writeFileSync(join(OUT, `${shot.id}.png`), Buffer.from(data, 'base64'));
       console.log(`captured ${shot.id}.png  (${shot.route}, ${shot.theme}${firstRun ? ', first run' : ''})`);

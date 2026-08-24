@@ -550,9 +550,8 @@ export function WindowPlan({
       <p className="cd-burn-foot" style={{ display: 'flex', alignItems: 'flex-start', gap: '4px' }}>
         <Icon name="alert-triangle" size={12} />
         <span>
-          Estimate. Shaded stretches are the minutes this plan predicts you would spend blocked,
-          simulated from recorded history rather than measured. Each boundary is a reset the anchor
-          produces; a ring marks an anchor ClaudeDeck has actually observed.
+          Estimated from recorded history, not measured. Shading is predicted blocked time; a ring
+          marks an anchor actually observed.
         </span>
       </p>
 

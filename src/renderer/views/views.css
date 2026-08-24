@@ -377,3 +377,81 @@
   color: var(--text-primary);
   font-weight: 600;
 }
+
+/* --- planner: answer first ---------------------------------------------- */
+/*
+ * The Planner used to open with two paragraphs of theory and keep the hours
+ * editor below three charts. This block is the correction: one sentence of
+ * answer, the user's own hours one click away, and the explanation folded up
+ * for whoever wants it.
+ */
+
+.cd-answer {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-5);
+  border-radius: var(--radius-lg);
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+}
+
+.cd-answer-line {
+  margin: 0;
+  font-size: 1.375rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--text-primary);
+  text-wrap: pretty;
+}
+
+.cd-answer-sub {
+  margin: 0;
+  max-width: 68ch;
+  color: var(--text-secondary);
+  text-wrap: pretty;
+}
+
+.cd-answer-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+  margin-top: var(--space-2);
+}
+
+/* A native <details>: keyboard-operable and screen-reader-announced for free,
+   which a hand-rolled disclosure would have to re-earn. */
+.cd-explainer {
+  flex: 1 1 100%;
+  font-size: 0.875rem;
+  color: var(--text-secondary);
+}
+
+.cd-explainer > summary {
+  cursor: pointer;
+  width: fit-content;
+  padding: 2px 0;
+  color: var(--text-secondary);
+  border-radius: var(--radius-sm);
+}
+
+.cd-explainer > summary:hover {
+  color: var(--text-primary);
+}
+
+.cd-explainer > summary:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.cd-explainer[open] > summary {
+  margin-bottom: var(--space-2);
+  color: var(--text-primary);
+}
+
+.cd-explainer p {
+  margin: 0 0 var(--space-2);
+  max-width: 74ch;
+  text-wrap: pretty;
+}
