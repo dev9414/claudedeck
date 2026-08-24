@@ -29,9 +29,16 @@ quickly, so check its README if something below looks out of date.*
 | Usage display | current percentages, with an age marker on cached numbers | current percentages **plus** recorded history and charts |
 | Recorded history | not persisted as a time series | NDJSON time series, one file per UTC day, with a retention setting |
 | Forecasting | pace and projection fields in `--json`, deliberately kept out of the human views | least-squares burn rate, projection cone and pace, charted and labelled as an estimate |
-| Credentials at rest, Windows | file-based, inside the backup directory | encrypted with DPAPI via Electron `safeStorage` |
-| Credentials at rest, Linux/WSL | file-based, mode `0600` | encrypted via the desktop secret service, or plaintext with an explicit marker when there is none |
+| Credentials at rest, Windows | base64 `.enc` files, mode `0600`, in the backup directory | encrypted with DPAPI via Electron `safeStorage` |
+| Credentials at rest, Linux/WSL | base64 `.enc` files, mode `0600` | encrypted via the desktop secret service, or plaintext with an explicit marker when there is none |
 | Credentials at rest, macOS | Keychain | Keychain, through `safeStorage` |
+
+> On the two file-based platforms the difference is narrower than "encrypted vs
+> not": claude-swap base64-encodes and sets `0600`, which stops a credential
+> being read out of a backup by accident and stops other users on the box
+> opening it. Base64 is encoding rather than encryption, so it does not resist
+> anyone who has the file and means to read it — which is what a keychain adds.
+> Both approaches leave a credential readable by *your own* OS user.
 | Before a switch | switches | computes the plan and shows the exact writes; `--dry-run` in the CLI, a confirm step in the GUI |
 | Global read-only mode | — | safe mode: every disk write refused |
 | Demo / fixture mode | — | `CLAUDEDECK_DEMO=1`, a backend that cannot reach a credential |
@@ -45,7 +52,7 @@ quickly, so check its README if something below looks out of date.*
 | Machine-readable output | `--json` on `list`/`status`/`switch`, JSONL from `auto` | `--json` on every command, JSONL from `auto` |
 | Exit codes for automation | `0/1/2/3` on `auto --once` | `0/1/2/3` on `auto --once` and on `switch` |
 | Update check | checks PyPI | none; no network call other than Anthropic's endpoints |
-| Tests | ~1,960 test functions across 37 files | new and much smaller |
+| Tests | ~35 test modules; its `pyproject.toml` notes a 1,929-test run | 1,056, new and much narrower in scope |
 | Maturity | in use, long-tested | 0.1.0 |
 
 ---
@@ -56,7 +63,7 @@ Read this part before the next one.
 
 **Maturity, by a wide margin.** claude-swap has been through many releases
 against real accounts, real Keychains, real 429s and a Windows keyring migration
-that had to be got right. Its test suite is roughly 1,960 test functions across
+that had to be got right. Its own `pyproject.toml` records a run of 1,929 tests across
 37 files. ClaudeDeck's engine implements the same rules, but it has not been run
 against as many real installs, and rules that look identical on paper are not
 the same thing as rules that have survived a year of edge cases.

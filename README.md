@@ -72,10 +72,10 @@ situation legible before it bites:
 ## Install
 
 > [!NOTE]
-> Pre-built installers are published on the [Releases](https://github.com/dev9414/claudedeck/releases)
-> page for each tagged version. They are **not code-signed** — Windows
-> SmartScreen and macOS Gatekeeper will warn you. Build from source if that
-> matters to you; it takes about a minute.
+> **There are no published installers yet.** Build from source — it takes about
+> a minute. When releases do land they will not be code-signed, so Windows
+> SmartScreen and macOS Gatekeeper will warn; verify against the published
+> checksums or keep building from source.
 
 ### From source
 
@@ -273,10 +273,10 @@ for working out the hard parts.
 | Tray / menu bar | macOS menu bar only | **Windows, macOS, Linux** |
 | Usage view | current percentage | **recorded history + burn-rate forecast** |
 | Projections | `--json` only, deliberately hidden | **charted as a labelled estimate** |
-| Credentials on Windows/Linux | plaintext files | **OS-encrypted**, with honest fallback |
+| Credentials on Windows/Linux | base64 `.enc` files, mode `0600` | **OS-encrypted** (DPAPI / libsecret), with honest fallback |
 | Before a switch | switches | **previews the exact writes** |
 | Parallel accounts in one terminal | ✅ session mode | ❌ not implemented |
-| Maturity | mature, ~1900 tests | new |
+| Maturity | in use since January, large suite | new |
 
 **Where claude-swap is still ahead:** it has a battle-tested switching engine, a
 far larger test suite, and `cswap run` — session mode, which launches Claude Code
