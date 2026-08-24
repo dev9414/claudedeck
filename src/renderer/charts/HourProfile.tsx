@@ -198,7 +198,10 @@ export function HourProfile({
     () => [
       { label: 'utilization gained', color: BAR_COLOR, sub: 'per local hour' },
       { label: 'thin history', color: BAR_COLOR, band: true, sub: `under ${minSamples} observations` },
-      { label: 'peak hours', color: 'var(--grid)', band: true, sub: 'your declaration' },
+      // A neutral ink, not the hairline the band is filled with: at the tint the
+      // swatch applies, --grid disappears against the surface. Still chromaless,
+      // so it reads as a band rather than a ninth series.
+      { label: 'peak hours', color: 'var(--text-secondary)', band: true, sub: 'your declaration' },
     ],
     [minSamples],
   );
@@ -271,11 +274,6 @@ export function HourProfile({
               />
             ),
           )}
-          {ranges[0] && ranges[0][1] > ranges[0][0] ? (
-            <text className="cd-limit-label" x={PAD.left + ranges[0][0] * step + 3} y={PAD.top + 10}>
-              peak
-            </text>
-          ) : null}
 
           {/* one axis: utilization points gained per hour */}
           {yTicks.map((tick) => (
@@ -350,6 +348,14 @@ export function HourProfile({
               </text>
             ) : null,
           )}
+
+          {/* The band it names, captioned from the padding just above the plot:
+              after the bars in paint order, and clear of the tallest of them. */}
+          {ranges[0] && ranges[0][1] > ranges[0][0] ? (
+            <text className="cd-limit-label" x={PAD.left + ranges[0][0] * step + 3} y={PAD.top - 6}>
+              peak
+            </text>
+          ) : null}
         </svg>
       </div>
 

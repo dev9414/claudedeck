@@ -24,6 +24,7 @@ import type {
   SwitchRequest,
   SwitchStrategy,
   SwitchResult,
+  UsageSnapshot,
   UsageWindow,
 } from '@shared/types';
 import { headroom } from '@core/usage';
@@ -249,7 +250,7 @@ const STATUS_FOR_USAGE: Record<Account['usageStatus'], ChartStatus> = {
 // Derivations
 // ---------------------------------------------------------------------------
 
-/** Everything worth showing in a meter, including the separate spend axis. */
+/** The rate-limit windows, and only those — the meter's bars are quota gates. */
 function meterWindows(account: Account | null): UsageWindow[] {
   const usage = account?.usage ?? account?.lastGoodUsage;
   if (!usage) return [];
@@ -257,15 +258,22 @@ function meterWindows(account: Account | null): UsageWindow[] {
   if (usage.fiveHour) windows.push(usage.fiveHour);
   if (usage.sevenDay) windows.push(usage.sevenDay);
   windows.push(...usage.scoped);
-  if (usage.spend) {
-    windows.push({
-      key: 'spend',
-      label: `Extra usage (${usage.spend.used.toFixed(2)} of ${usage.spend.limit.toFixed(2)} ${usage.spend.currency})`,
-      pct: usage.spend.pct,
-      resetsAt: usage.spend.resetsAt,
-    });
-  }
   return windows;
+}
+
+/**
+ * Pay-as-you-go credit, as its own line rather than a fourth bar.
+ *
+ * `spend` is a billing axis, not a rate-limit gate — `relevantWindows` in
+ * core/usage.ts leaves it out of every switching decision — so a bar under a
+ * heading that reads "Quota windows" claimed something untrue, and it also made
+ * this screen show four windows where Accounts showed three. Same sentence on
+ * both screens now.
+ */
+function spendNote(usage: UsageSnapshot | undefined): string | null {
+  const spend = usage?.spend;
+  if (!spend) return null;
+  return `Extra usage credit: ${spend.used.toFixed(2)} of ${spend.limit.toFixed(2)} ${spend.currency} used — billed separately, not a rate limit.`;
 }
 
 /**
@@ -491,8 +499,9 @@ export function Dashboard() {
   // A window can read higher than the binding one and still not gate, because
   // the auto-switch model list decides what counts. Say so rather than look wrong.
   const ungated = windows.filter(
-    (w) => w.key !== 'spend' && room !== null && w.pct > 100 - room.remaining && w.key !== room.bindingWindow,
+    (w) => room !== null && w.pct > 100 - room.remaining && w.key !== room.bindingWindow,
   );
+  const credit = spendNote(usage);
 
   const attention = accounts.filter(
     (a) =>
@@ -665,6 +674,12 @@ export function Dashboard() {
             <p className="cd-window-note">
               {ungated.map((w) => w.label).join(', ')} sits higher but does not gate switching — add it to the
               auto-switch model list in Automation to make it count.
+            </p>
+          ) : null}
+
+          {credit ? (
+            <p className="cd-window-note">
+              <Icon name="plus" size={12} /> {credit}
             </p>
           ) : null}
         </div>

@@ -17,6 +17,7 @@
  */
 
 import { useMemo } from 'react';
+import type { ReactNode } from 'react';
 import { FIVE_HOUR_MS } from '@shared/types';
 import type { DaySpan, PlanOutcome } from '@shared/types';
 import { MINUTES_PER_DAY, formatHHMM, spanLengthMin } from '@core/schedule';
@@ -50,6 +51,13 @@ const BAR_H = 10;
 const BAR_R = 4;
 /** Half of the 2px surface-coloured gap that separates adjacent fills. */
 const BAR_INSET = 1;
+
+/**
+ * The bottom strip of a lane, kept for its own text: a 10px label plus a pixel
+ * of air. The reset clock is the useful half of a boundary, so no vertical mark
+ * sharing its x is allowed to run through it.
+ */
+const LABEL_BAND = 11;
 
 /** Room for the lane names; collapses to the slot number on a narrow card. */
 const GUTTER_WIDE = 116;
@@ -292,14 +300,18 @@ export function WindowPlan({
   const bandX = (t: number): number => clamp(x.map(t), plotLeft, plotRight);
   const bandHeight = lanesBottom - bandTop + 4;
 
-  /** One lane's marks. The baseline lane is drawn thinner and in the neutral. */
-  const renderLane = (
+  /**
+   * One lane, returned as marks and text separately so every label is painted
+   * after every mark in the plot — including the now rule. Nothing in here can
+   * draw over a word it is meant to explain.
+   */
+  const laneParts = (
     key: string,
     row: number,
     color: string,
     outcome: PlanOutcome,
     options: { faint?: boolean; observedAnchorAt?: number },
-  ) => {
+  ): { marks: ReactNode; text: ReactNode } => {
     const top = laneTop(row);
     const mid = top + LANE_H / 2;
     const faint = options.faint === true;
@@ -308,6 +320,15 @@ export function WindowPlan({
     const barR = Math.min(BAR_R, barH / 2);
     const anchorX = x.map(outcome.anchorAt);
     const anchorLate = anchorX > plotLeft + plotWidth * 0.72;
+    const opacity = faint ? 0.72 : 1;
+
+    // The reset clock sits on its boundary's own x, and the baseline lane puts
+    // its word in the same strip, so the marks that share that x stop above it.
+    const showResets = wide && !faint;
+    const labelY = top + LANE_H - 1;
+    const band = showResets || faint ? LABEL_BAND : 0;
+    const tickBottom = top + LANE_H - 2 - band;
+    const cutBottom = top + LANE_H - 4 - band;
 
     // Only the widest blocked stretch carries the word; repeating it on every
     // stretch would turn the lane into a paragraph.
@@ -319,8 +340,8 @@ export function WindowPlan({
       if (to - from > widest.width) widest = { width: to - from, centre: (from + to) / 2 };
     }
 
-    return (
-      <g key={key} opacity={faint ? 0.72 : 1}>
+    const marks = (
+      <g key={`${key}-marks`} opacity={opacity}>
         {/* the lane's own hairline, so an empty stretch still reads as a lane */}
         <rect x={plotLeft} y={mid - 1} width={plotWidth} height={2} rx={1} fill="var(--grid)" />
 
@@ -357,23 +378,18 @@ export function WindowPlan({
                 x1={to}
                 x2={to}
                 y1={top + 2}
-                y2={top + LANE_H - 2}
+                y2={tickBottom}
                 stroke="var(--text-secondary)"
                 strokeWidth={2}
                 strokeLinecap="round"
               />
-              {wide && !faint ? (
-                <text className="cd-axis-label" x={to} y={top + LANE_H - 1} textAnchor="middle">
-                  {formatClock(window.end)}
-                </text>
-              ) : null}
               {window.exhaustedAt === null ? null : (
                 <line
                   className="cd-projection"
                   x1={cut}
                   x2={cut}
                   y1={top + 4}
-                  y2={top + LANE_H - 4}
+                  y2={cutBottom}
                   style={{ stroke: 'var(--status-critical)' }}
                 />
               )}
@@ -381,39 +397,16 @@ export function WindowPlan({
           );
         })}
 
-        {/* The shading is self-describing only if it says so, but the word is
-            dropped rather than allowed to land on top of the anchor label. */}
-        {widest.width >= LABEL_MIN_PX && widest.centre > anchorX + ANCHOR_LABEL_PX ? (
-          <text
-            className="cd-limit-label"
-            x={widest.centre}
-            y={faint ? top + LANE_H - 1 : barY - 3}
-            textAnchor="middle"
-          >
-            blocked
-          </text>
-        ) : null}
-
         {/* the anchor: the one property of the window the user controls */}
         <line
           x1={anchorX}
           x2={anchorX}
           y1={top}
-          y2={top + LANE_H}
+          y2={top + LANE_H - band}
           stroke={faint ? OTHER_COLOR : color}
           strokeWidth={2}
           strokeLinecap="round"
         />
-        <text
-          className="cd-direct-label"
-          x={anchorLate ? anchorX - 5 : anchorX + 5}
-          y={top + 10}
-          textAnchor={anchorLate ? 'end' : 'start'}
-        >
-          {faint
-            ? `no plan, ${formatClock(outcome.anchorAt)}`
-            : `anchor ${formatClock(outcome.anchorAt)}`}
-        </text>
 
         {options.observedAnchorAt !== undefined &&
         Number.isFinite(options.observedAnchorAt) &&
@@ -429,7 +422,62 @@ export function WindowPlan({
         ) : null}
       </g>
     );
+
+    const text = (
+      <g key={`${key}-text`} opacity={opacity}>
+        {showResets
+          ? outcome.windows.map((window, index) => (
+              <text
+                key={`reset-${index}`}
+                className="cd-axis-label"
+                x={x.map(window.end)}
+                y={labelY}
+                textAnchor="middle"
+              >
+                {formatClock(window.end)}
+              </text>
+            ))
+          : null}
+
+        {/* The shading is self-describing only if it says so, but the word is
+            dropped rather than allowed to land on top of the anchor label. */}
+        {widest.width >= LABEL_MIN_PX && widest.centre > anchorX + ANCHOR_LABEL_PX ? (
+          <text
+            className="cd-limit-label"
+            x={widest.centre}
+            y={faint ? labelY : barY - 3}
+            textAnchor="middle"
+          >
+            blocked
+          </text>
+        ) : null}
+
+        <text
+          className="cd-direct-label"
+          x={anchorLate ? anchorX - 5 : anchorX + 5}
+          y={top + 10}
+          textAnchor={anchorLate ? 'end' : 'start'}
+        >
+          {faint
+            ? `no plan, ${formatClock(outcome.anchorAt)}`
+            : `anchor ${formatClock(outcome.anchorAt)}`}
+        </text>
+      </g>
+    );
+
+    return { marks, text };
   };
+
+  const laneRender: Array<{ marks: ReactNode; text: ReactNode }> = [
+    ...drawn.map((item, row) =>
+      laneParts(`lane-${item.lane.slot}`, row, item.color, item.lane.outcome, {
+        observedAnchorAt: item.lane.observedAnchorAt,
+      }),
+    ),
+    ...(baseline
+      ? [laneParts('lane-baseline', rowCount - 1, OTHER_COLOR, baseline, { faint: true })]
+      : []),
+  ];
 
   const ariaLabel =
     `Planned 5-hour windows for ${drawn.length} account${drawn.length === 1 ? '' : 's'} ` +
@@ -519,30 +567,26 @@ export function WindowPlan({
             </text>
           ) : null}
 
-          {drawn.map((item, row) =>
-            renderLane(`lane-${item.lane.slot}`, row, item.color, item.lane.outcome, {
-              observedAnchorAt: item.lane.observedAnchorAt,
-            }),
-          )}
-          {baseline
-            ? renderLane('lane-baseline', rowCount - 1, OTHER_COLOR, baseline, { faint: true })
-            : null}
+          {laneRender.map((part) => part.marks)}
 
           {nowX === null ? null : (
-            <>
-              <line
-                x1={nowX}
-                x2={nowX}
-                y1={bandTop}
-                y2={lanesBottom + 4}
-                stroke="var(--axis)"
-                strokeWidth={2}
-                strokeDasharray="2 3"
-              />
-              <text className="cd-limit-label" x={nowX + 4} y={10}>
-                now
-              </text>
-            </>
+            <line
+              x1={nowX}
+              x2={nowX}
+              y1={bandTop}
+              y2={lanesBottom + 4}
+              stroke="var(--axis)"
+              strokeWidth={2}
+              strokeDasharray="2 3"
+            />
+          )}
+
+          {/* Labels last, so no mark in this plot can strike a word. */}
+          {laneRender.map((part) => part.text)}
+          {nowX === null ? null : (
+            <text className="cd-limit-label" x={nowX + 4} y={10}>
+              now
+            </text>
           )}
         </svg>
       </div>

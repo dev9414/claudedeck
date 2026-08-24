@@ -10,7 +10,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { DragEvent } from 'react';
-import type { Account, SwitchResult, UsageWindow } from '@shared/types';
+import type { Account, SwitchResult, UsageSnapshot, UsageWindow } from '@shared/types';
 import { useDeckState } from '../hooks/useDeckState';
 import { Badge, UsageStatusBadge } from '../components/Badge';
 import { Button, IconButton } from '../components/Button';
@@ -57,6 +57,21 @@ function expiryNote(account: Account, now: number): { icon: 'clock' | 'alert-tri
   const delta = account.tokenExpiresAt - now;
   if (delta <= 0) return { icon: 'alert-triangle', text: `Token expired ${duration(-delta)} ago` };
   return { icon: 'clock', text: `Token valid for ${duration(delta)}` };
+}
+
+/**
+ * Pay-as-you-go credit, as its own line rather than a bar in the quota meter.
+ *
+ * `spend` is a billing axis, not a rate-limit gate — `relevantWindows` in
+ * core/usage.ts leaves it out of every switching decision — so listing it
+ * alongside the windows would claim it can block you. The Dashboard says this
+ * in the same words; the two screens must not disagree about what a quota
+ * window is.
+ */
+function spendNote(usage: UsageSnapshot | undefined): string | null {
+  const spend = usage?.spend;
+  if (!spend) return null;
+  return `Extra usage credit: ${spend.used.toFixed(2)} of ${spend.limit.toFixed(2)} ${spend.currency} used — billed separately, not a rate limit.`;
 }
 
 function meterWindows(account: Account): UsageWindow[] {
@@ -391,6 +406,7 @@ export function Accounts() {
           {accounts.map((account, index) => {
             const expiry = expiryNote(account, now);
             const windows = meterWindows(account);
+            const credit = spendNote(account.usage ?? account.lastGoodUsage);
             const editing = editingSlot === account.slot;
             return (
               <li
@@ -481,6 +497,11 @@ export function Accounts() {
                     <span>
                       <Icon name={expiry.icon} size={12} /> {expiry.text}
                     </span>
+                    {credit ? (
+                      <span>
+                        <Icon name="plus" size={12} /> {credit}
+                      </span>
+                    ) : null}
                     {account.quarantineReason ? (
                       <span>
                         <Icon name="alert-triangle" size={12} /> {account.quarantineReason}
@@ -533,16 +554,22 @@ export function Accounts() {
                     </form>
                   ) : (
                     <div className="cd-acct-actions">
-                      <Button
-                        variant="primary"
-                        icon="bolt"
-                        size="sm"
-                        disabled={account.active || pending !== null}
-                        busy={pending === `switch:${account.slot}`}
-                        onClick={() => void startSwitch(account)}
-                      >
-                        {account.active ? 'Signed in' : 'Switch to this account'}
-                      </Button>
+                      {/* Nothing here for the active row: it already carries the
+                          Active badge, and a disabled primary reading "Signed
+                          in" made the loudest control in the list the one thing
+                          you cannot press. State belongs in the badge. */}
+                      {account.active ? null : (
+                        <Button
+                          variant="primary"
+                          icon="bolt"
+                          size="sm"
+                          disabled={pending !== null}
+                          busy={pending === `switch:${account.slot}`}
+                          onClick={() => void startSwitch(account)}
+                        >
+                          Switch to this account
+                        </Button>
+                      )}
                       <Button
                         icon="pin"
                         size="sm"

@@ -382,8 +382,18 @@ h3,
    Icon
    -------------------------------------------------------------------------- */
 
+/* Icons opt back out of the reset's `svg { display: block }`, because the
+   `<Icon/> label` pattern is written all over the views and a block glyph
+   orphans onto its own line. Scoped to `.cd-icon` rather than flipping the
+   reset: charts and the logo are raw `<svg>` and stay blocks. Standalone
+   glyphs are unaffected too — every one of them is a flex or grid item
+   (.cd-btn, .cd-badge, .cd-empty-icon, .cd-toggle-knob), and those blockify
+   their children regardless. The nudge below the baseline seats a 12-16px
+   glyph on the x-height of the text beside it instead of on its descender. */
 .cd-icon {
+  display: inline-block;
   flex: none;
+  vertical-align: -0.15em;
   color: inherit;
 }
 

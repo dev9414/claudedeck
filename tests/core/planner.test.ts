@@ -24,13 +24,20 @@ import {
   candidateAnchors,
   fleetCost,
   planDay,
+  scoreAnchors,
   scoredPeakMinutes,
   simulateFleet,
 } from '@core/planner';
 import { MIN_ACTIONABLE_CONFIDENCE, emptyProfile } from '@core/profile';
 import { FIVE_HOUR_MS } from '@shared/types';
 import type { PlanAccount, PlanInput, SimInput } from '@core/planner';
-import type { PlanOutcome, UsageProfile, WorkSchedule } from '@shared/types';
+import type {
+  AnchorCandidate,
+  PlanOutcome,
+  SessionPlan,
+  UsageProfile,
+  WorkSchedule,
+} from '@shared/types';
 
 import { HOUR, MINUTE } from '../helpers/fixtures';
 
@@ -771,6 +778,165 @@ describe('candidateAnchors', () => {
     expect(STEP_MIN).toBe(5);
     expect(ANCHOR_LOOKBACK_MIN).toBe(360);
     expect(DEFAULT_MAX_PASSES).toBe(8);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The rest of the search, kept
+// ---------------------------------------------------------------------------
+
+/**
+ * The optimiser scores every anchor and used to return only the winner, so
+ * "what would starting at 10:30 cost me" had no answer but a second simulator.
+ * `SessionPlan.candidates` is that work kept. The contract these tests defend is
+ * that it is the *same* work: an entry has to agree with simulating its own
+ * anchor directly, and the entry for the recommended anchor has to agree with
+ * the plan the user is being shown.
+ */
+
+/**
+ * The scored start times, where a plan that kept none is a failure rather than
+ * an empty list. `candidates` is optional precisely because some plans have
+ * nothing honest to price, so a test that quietly accepted `undefined` would
+ * pass on every one of them.
+ */
+function scored(plan: SessionPlan): AnchorCandidate[] {
+  const list = plan.candidates;
+  if (list === undefined) throw new Error('expected the plan to keep its scored start times');
+  return list;
+}
+
+describe('planDay: the scored start times it keeps', () => {
+  it('keeps one entry per candidate anchor, ascending and deduplicated', () => {
+    const plan = planDay(planInput());
+    const list = scored(plan);
+    const anchors = candidateAnchors(simInput(), DAY_START - HOUR);
+
+    expect(list.map((entry) => entry.anchorAt)).toEqual(anchors);
+    expect(list).toHaveLength(145);
+    expect(new Set(list.map((entry) => entry.anchorAt)).size).toBe(list.length);
+    for (let i = 1; i < list.length; i += 1) {
+      expect(only(list, i).anchorAt).toBeGreaterThan(only(list, i - 1).anchorAt);
+    }
+  });
+
+  it('prices the recommended anchor at exactly the plan own cost', () => {
+    const plan = planDay(planInput());
+    const planned = only(plan.accounts).outcome;
+    const list = scored(plan);
+    const entry = list.find((item) => item.anchorAt === planned.anchorAt);
+
+    expect(planned.anchorAt).toBe(at(8, 15));
+    expect(entry).toEqual({
+      anchorAt: planned.anchorAt,
+      blockedWorkMin: planned.blockedWorkMin,
+      blockedPeakMin: planned.blockedPeakMin,
+      cost: planned.cost,
+    });
+    // And nothing on offer beats it: the list the recommendation came out of
+    // must not read as a better recommendation.
+    expect(Math.min(...list.map((item) => item.cost))).toBe(planned.cost);
+  });
+
+  it('agrees with simulating any one of its start times directly', () => {
+    const list = scored(planDay(planInput()));
+    const eleven = list.find((entry) => entry.anchorAt === at(11));
+    const direct = only(simulateFleet([at(11)], simInput()));
+
+    // Anchoring at 11:00 wastes the morning and puts the reset past the peak:
+    // 270 blocked working minutes, 90 of them peak, scored at weight 3.
+    expect(eleven).toEqual({
+      anchorAt: at(11),
+      blockedWorkMin: 270,
+      blockedPeakMin: 90,
+      cost: 540,
+    });
+    expect(eleven?.blockedWorkMin).toBe(direct.blockedWorkMin);
+    expect(eleven?.cost).toBe(direct.cost);
+  });
+
+  it('offers nothing that has already passed, and still prices what it recommends', () => {
+    const plan = planDay(planInput({ nowMs: at(11) }));
+    const planned = only(plan.accounts).outcome;
+    const list = scored(plan);
+
+    expect(only(list).anchorAt).toBe(at(11));
+    for (const entry of list) expect(entry.anchorAt).toBeGreaterThanOrEqual(at(11));
+    // The awkward path: nothing beats a start of work that has gone, so the
+    // recommendation is the earliest anchor left -- and the list still has to
+    // agree with it.
+    expect(only(list).cost).toBe(planned.cost);
+    expect(only(list).blockedPeakMin).toBe(planned.blockedPeakMin);
+  });
+
+  it('prices the baseline anchor when the baseline is what it recommends', () => {
+    const plan = planDay(planInput({ accounts: [acct(1, LIGHT)] }));
+    const planned = only(plan.accounts).outcome;
+    const entry = scored(plan).find((item) => item.anchorAt === planned.anchorAt);
+
+    expect(planned.anchorAt).toBe(at(9));
+    expect(entry?.cost).toBe(planned.cost);
+    expect(entry?.cost).toBe(0);
+  });
+
+  it('is the same set twice over', () => {
+    expect(scored(planDay(planInput()))).toEqual(scored(planDay(planInput())));
+  });
+
+  it('keeps nothing at all when there is nothing honest to price', () => {
+    // No observed hour means every minute figure would be arithmetic about an
+    // invented day, and no account means there is no first message to place.
+    // Absent, not empty: "we cannot say" and "no alternative helps" are
+    // different answers and must not share a representation.
+    expect(planDay(planInput({ accounts: [acct(1, emptyProfile())] })).candidates).toBeUndefined();
+    expect(planDay(planInput({ accounts: [] })).candidates).toBeUndefined();
+  });
+});
+
+describe('scoreAnchors', () => {
+  it('holds the rest of the fleet still, so only the start time differs', () => {
+    const schedule = sched({
+      work: { start: hm(9), end: hm(19) },
+      peak: { start: hm(12), end: hm(16) },
+    });
+    const input = simInput({ schedule, profiles: [flat(50), flat(50)] });
+    // The anchors `planDay` settles on for this fleet, three hours apart.
+    const list = scoreAnchors(input, [at(7), at(10)], [at(7), at(10)]);
+
+    const staggered = only(simulateFleet([at(7), at(10)], input));
+    const together = only(simulateFleet([at(7), at(7)], input));
+    expect(staggered.blockedWorkMin).toBe(0);
+    expect(together.blockedWorkMin).toBeGreaterThan(0);
+
+    // Slot 1 at its own anchor scores the plan's day, not the day where the
+    // whole fleet moved with it.
+    expect(only(list, 0).cost).toBe(staggered.cost);
+    expect(only(list, 0).cost).not.toBe(together.cost);
+
+    // And moving slot 1 onto 10:00 leaves slot 2 where it was.
+    const both = only(simulateFleet([at(10), at(10)], input));
+    expect(only(list, 1)).toEqual({
+      anchorAt: at(10),
+      blockedWorkMin: both.blockedWorkMin,
+      blockedPeakMin: both.blockedPeakMin,
+      cost: both.cost,
+    });
+  });
+
+  it('sorts, deduplicates and drops what is not a time', () => {
+    const list = scoreAnchors(
+      simInput(),
+      [at(11), at(9), at(11), Number.NaN, Number.POSITIVE_INFINITY],
+      [at(9)],
+    );
+    expect(list.map((entry) => entry.anchorAt)).toEqual([at(9), at(11)]);
+  });
+
+  it('has nothing to say about an account outside the fleet', () => {
+    expect(scoreAnchors(simInput(), [at(9)], [])).toEqual([]);
+    expect(scoreAnchors(simInput(), [at(9)], [at(9)], 1)).toEqual([]);
+    expect(scoreAnchors(simInput(), [at(9)], [at(9)], -1)).toEqual([]);
+    expect(scoreAnchors(simInput(), [], [at(9)])).toEqual([]);
   });
 });
 

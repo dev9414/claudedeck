@@ -17,6 +17,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { FIVE_HOUR_MS } from '@shared/types';
 import type {
+  AnchorCandidate,
   AnchorObservation,
   AnchorResult,
   PlannerConfig,
@@ -188,6 +189,13 @@ export function Planner() {
   // Declared with the rest of the state: this sits above two early returns,
   // and a hook below them changes the hook count between renders.
   const [hoursOpen, setHoursOpen] = useState(false);
+  /**
+   * The start time the user is asking about, epoch ms. Held as a plain instant
+   * and re-checked against the plan's own candidates on every render, so a plan
+   * that has moved on (a new day, a recompute) falls back to the recommendation
+   * instead of pricing a time that is no longer on offer.
+   */
+  const [askedAt, setAskedAt] = useState<number | null>(null);
 
   // Every poll can move the plan, and so can any change to the hours it is
   // scored against; those two things are the whole trigger for a re-plan.
@@ -344,6 +352,15 @@ export function Planner() {
     dayOffset === 0 ? '' : dayOffset === 1 ? ' (tomorrow)' : ` (${plan?.day ?? 'another day'})`;
 
   /**
+   * Minutes of peak the plan was scored against: the denominator every
+   * blocked-peak figure on this page is quoted out of. `peakMinutesSaved` is a
+   * delta against starting when work starts, not this -- the two differ by
+   * hours, and the page used to print the smaller one as though it were the
+   * larger.
+   */
+  const peakMin = plan ? scoredPeakMinutes(plan.schedule, dayStartMs) : 0;
+
+  /**
    * The one-line answer, chosen so the page opens with what to do rather than
    * with why it matters. Order is deliberate: a missing input beats a missing
    * measurement beats a real recommendation, because that is the order in which
@@ -384,10 +401,6 @@ export function Planner() {
     }
     const anchorAt = first.outcome.anchorAt;
     const reset = first.outcome.windows[0]?.end ?? anchorAt + FIVE_HOUR_MS;
-    // `peakMinutesSaved` is a delta against starting when work starts, not the
-    // peak the plan protects -- the two differ by hours, and the page used to
-    // print the smaller one as though it were the larger.
-    const peakMin = scoredPeakMinutes(plan.schedule, dayStartMs);
     const protectedMin = peakMin - first.outcome.blockedPeakMin;
     const saved = minutesText(plan.peakMinutesSaved);
     const startOfWork = formatHHMM(governing.work.start);
@@ -429,6 +442,55 @@ export function Planner() {
       ...(observed === null ? {} : { observedAnchorAt: observed.anchorAt }),
     };
   });
+
+  /**
+   * "What if I started at a different time?" — answered out of `plan.candidates`,
+   * the scores the optimiser already computed, so the pick and the
+   * recommendation are two readings of one simulation rather than two opinions.
+   *
+   * Null when there is nothing honest to price: the plan carries no candidates
+   * (no accounts, or no observed usage to simulate against) or the day has only
+   * the one start time left.
+   */
+  const whatIf = ((): {
+    options: AnchorCandidate[];
+    askedAt: number;
+    askedBlocked: number;
+    /** True while the pick is still the recommendation, which is the default. */
+    asIs: boolean;
+    recommendedAt: number;
+    recommendedBlocked: number;
+    /** Null when the recommendation *is* starting at work-start. */
+    baselineAt: number | null;
+    baselineBlocked: number;
+    unit: string;
+    delta: number;
+  } | null => {
+    const first = plan?.accounts[0];
+    const options = plan?.candidates ?? [];
+    if (plan === null || first === undefined || options.length < 2) return null;
+    const recommendedAt = first.outcome.anchorAt;
+    const asked =
+      options.find((option) => option.anchorAt === askedAt) ??
+      options.find((option) => option.anchorAt === recommendedAt);
+    if (asked === undefined) return null;
+    // Peak minutes are the point when there is a peak to protect; with the peak
+    // dropped or empty, blocked working minutes are what was actually scored.
+    const blocked = (o: { blockedPeakMin: number; blockedWorkMin: number }): number =>
+      peakMin > 0 ? o.blockedPeakMin : o.blockedWorkMin;
+    return {
+      options,
+      askedAt: asked.anchorAt,
+      askedBlocked: blocked(asked),
+      asIs: asked.anchorAt === recommendedAt,
+      recommendedAt,
+      recommendedBlocked: blocked(first.outcome),
+      baselineAt: plan.baseline.anchorAt === recommendedAt ? null : plan.baseline.anchorAt,
+      baselineBlocked: blocked(plan.baseline),
+      unit: peakMin > 0 ? 'peak' : 'working day',
+      delta: Math.round(blocked(asked)) - Math.round(blocked(first.outcome)),
+    };
+  })();
 
   const chartProfile = profile ?? plan?.profile ?? null;
   const dayContainsNow = now >= dayStartMs && now < dayStartMs + 24 * MIN_PER_HOUR * 60_000;
@@ -743,10 +805,6 @@ export function Planner() {
                         </Button>
                       )}
                     </div>
-                    <p className="cd-muted">
-                      {`Anchor now runs Claude Code on this account with the prompt "${cfg.anchorPrompt}". That is a real message: it opens the 5-hour window immediately and spends a small amount of this account's own quota. Nothing is sent until you click.`}
-                    </p>
-
                     {result?.ok ? (
                       <p className="cd-secondary" role="status">
                         <Icon name="check" size={12} />{' '}
@@ -775,6 +833,91 @@ export function Planner() {
                   </div>
                 );
               })}
+
+              {/* Once for the card, not once per account: four accounts printed
+                  this paragraph four times. */}
+              <p className="cd-muted">
+                {`"Anchor now" sends "${cfg.anchorPrompt}" through Claude Code — a real message that opens the window and spends a little of that account's quota. Nothing is sent until you click.`}
+              </p>
+
+              {/* The optimiser scored a couple of hundred start times to find
+                  the one above. This is the rest of that work, so a user who
+                  cannot start then can see what their own time costs instead of
+                  being told only the answer. */}
+              <hr className="cd-divider" />
+              <h3 className="cd-h3">What if I start at another time?</h3>
+              {whatIf === null ? (
+                <p className="cd-muted">
+                  {observedHours === 0
+                    ? 'Nothing recorded yet to cost another start time against.'
+                    : `No other start time is still open ${dayWord}.`}
+                </p>
+              ) : (
+                <>
+                  <label className="cd-field cd-field--inline">
+                    <span className="cd-field-label">Start at</span>
+                    <select
+                      className="cd-select"
+                      value={String(whatIf.askedAt)}
+                      onChange={(event) => setAskedAt(Number(event.target.value))}
+                    >
+                      {whatIf.options.map((option) => (
+                        <option key={option.anchorAt} value={option.anchorAt}>
+                          {`${formatClock(option.anchorAt)}${
+                            option.anchorAt === whatIf.recommendedAt ? ' — recommended' : ''
+                          }`}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <ul className="cd-forecast-list">
+                    <li>
+                      <Icon
+                        name={
+                          whatIf.asIs ? 'bolt' : whatIf.delta > 0 ? 'alert-triangle' : 'check'
+                        }
+                        size={12}
+                      />
+                      <strong>
+                        {`${formatClock(whatIf.askedAt)}${dayTag}: ${minutesText(
+                          whatIf.askedBlocked,
+                        )} of your ${whatIf.unit} blocked`}
+                      </strong>
+                      <span>
+                        {whatIf.asIs
+                          ? 'recommended'
+                          : whatIf.delta === 0
+                            ? 'same as recommended'
+                            : whatIf.delta > 0
+                              ? `${minutesText(whatIf.delta)} worse`
+                              : `${minutesText(-whatIf.delta)} better`}
+                      </span>
+                    </li>
+                    {whatIf.asIs ? null : (
+                      <li>
+                        <Icon name="bolt" size={12} />
+                        <strong>
+                          {`${formatClock(whatIf.recommendedAt)}: ${minutesText(
+                            whatIf.recommendedBlocked,
+                          )}`}
+                        </strong>
+                        <span>recommended</span>
+                      </li>
+                    )}
+                    {whatIf.baselineAt === null ? null : (
+                      <li>
+                        <Icon name="minus" size={12} />
+                        <strong>
+                          {`${formatClock(whatIf.baselineAt)}: ${minutesText(
+                            whatIf.baselineBlocked,
+                          )}`}
+                        </strong>
+                        <span>no planning</span>
+                      </li>
+                    )}
+                  </ul>
+                </>
+              )}
 
               {plan.rationale.length > 0 ? (
                 <>

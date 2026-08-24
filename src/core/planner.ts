@@ -26,6 +26,7 @@
 import { FIVE_HOUR_MS } from '@shared/types';
 import type {
   AccountPlan,
+  AnchorCandidate,
   DaySpan,
   PlanOutcome,
   SessionPlan,
@@ -466,6 +467,48 @@ export function candidateAnchors(input: SimInput, nowMs?: number): number[] {
 }
 
 /**
+ * Price a set of candidate anchors for one account, keeping the search the
+ * optimiser already ran instead of throwing all but the winner away. This is
+ * what lets a caller ask "what would starting at 10:30 cost me" and get the
+ * answer from the same simulation the recommendation came out of.
+ *
+ * `anchors` is the fleet as recommended and only `index` moves, which is what
+ * makes two entries comparable: the single difference between them is the start
+ * time the user would choose. Entries ascend by `anchorAt`, duplicates collapse,
+ * and each carries minutes rather than windows -- a few hundred small numbers,
+ * not a few hundred simulated days kept alive.
+ */
+export function scoreAnchors(
+  input: SimInput,
+  candidates: number[],
+  anchors: number[],
+  index = 0,
+): AnchorCandidate[] {
+  const trial = [...anchors];
+  if (trial.length === 0 || index < 0 || index >= trial.length) return [];
+
+  const times = new Set<number>();
+  for (const candidate of candidates) {
+    const at = finite(candidate);
+    if (at !== null) times.add(at);
+  }
+
+  const scored: AnchorCandidate[] = [];
+  for (const anchorAt of [...times].sort((a, b) => a - b)) {
+    trial[index] = anchorAt;
+    const outcome = simulateFleet(trial, input)[index];
+    if (outcome === undefined) continue;
+    scored.push({
+      anchorAt,
+      blockedWorkMin: outcome.blockedWorkMin,
+      blockedPeakMin: outcome.blockedPeakMin,
+      cost: outcome.cost,
+    });
+  }
+  return scored;
+}
+
+/**
  * Minutes of peak the plan was actually scored against: the declared peak
  * clamped into working hours, which is exactly what `blockedPeakMin` is counted
  * out of. Exported so a caller can turn blocked peak minutes into *protected*
@@ -855,6 +898,13 @@ export function planDay(input: PlanInput): SessionPlan {
   }
   rationale.push(...caveats);
 
+  // The rest of the search, kept. Every one of these anchors was simulated to
+  // find the one being recommended, and a user who wants to start at a different
+  // time has a right to the number rather than to a fresh guess. The recommended
+  // anchor is unioned in so it is always priced here too -- with nothing beating
+  // the baseline it is not drawn from `candidates` at all.
+  const scored = scoreAnchors(sim, [...candidates, anchors[0] ?? work.startMs], anchors);
+
   return {
     day,
     schedule,
@@ -862,6 +912,7 @@ export function planDay(input: PlanInput): SessionPlan {
     accounts: accountPlans,
     baseline,
     peakMinutesSaved,
+    candidates: scored,
     rationale: rationale.slice(0, 5),
     lowConfidence,
     usingDefaultSchedule,

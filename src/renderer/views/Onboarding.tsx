@@ -25,7 +25,7 @@ import { Button, IconButton } from '../components/Button';
 import { Icon, type IconName } from '../components/Icon';
 import { Logo } from '../components/Logo';
 import { ScheduleEditor } from '../components/ScheduleEditor';
-import { DEFAULT_SCHEDULE, formatHHMM, validateSchedule } from '@core/schedule';
+import { DEFAULT_SCHEDULE, validateSchedule } from '@core/schedule';
 import './views.css';
 
 const DOCS_URL = 'https://docs.claude.com/en/docs/claude-code/overview';
@@ -270,7 +270,7 @@ function Wizard({
               <Button variant="primary" icon="refresh" onClick={() => void reload()}>
                 Re-check
               </Button>
-              <Button variant="ghost" icon="chevron" onClick={() => setDone(false)}>
+              <Button variant="ghost" icon="chevron-left" onClick={() => setDone(false)}>
                 Back to the wizard
               </Button>
             </div>
@@ -761,7 +761,7 @@ function AddAccountStep({
       ) : null}
 
       <div className="cdo-nav">
-        <Button onClick={onBack}>
+        <Button icon="chevron-left" onClick={onBack}>
           Back
         </Button>
         <span className="cd-spacer" />
@@ -837,10 +837,13 @@ function HoursStep({
     <>
       <section className="cd-card">
         <div className="cd-stack">
+          {/* The Planner's "How this works" copy, word for word. Concrete
+              clock times are what make the mechanism land; the interpolated
+              version this replaced ended on "5 hours after that", which had no
+              referent. One explanation, one phrasing. */}
           <p className="cd-view-sub">
-            Claude&apos;s 5-hour quota window starts at your <strong>first message</strong>, not on the clock. Send one
-            at {formatHHMM(schedule.work.start)} and your resets land 5 hours later; send it at{' '}
-            {formatHHMM(schedule.peak.start)} and they land 5 hours after that.
+            Your 5-hour window starts at your <strong>first message</strong>, not on the clock. Start at 09:00 and
+            resets land 14:00 and 19:00; start at 11:00 and they land 16:00 and 21:00.
           </p>
           <p className="cd-view-sub">
             Tell ClaudeDeck when your day actually matters and it can work out which start time keeps a reset inside
@@ -864,7 +867,7 @@ function HoursStep({
       ) : null}
 
       <div className="cdo-actions">
-        <Button variant="ghost" icon="chevron" onClick={onBack} disabled={busy}>
+        <Button variant="ghost" icon="chevron-left" onClick={onBack} disabled={busy}>
           Back
         </Button>
         <span className="cd-spacer" />
@@ -1040,7 +1043,7 @@ function BehaviorStep({
       </section>
 
       <div className="cdo-nav">
-        <Button onClick={onBack}>
+        <Button icon="chevron-left" onClick={onBack}>
           Back
         </Button>
         <span className="cd-spacer" />

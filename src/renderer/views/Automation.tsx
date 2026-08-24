@@ -560,7 +560,10 @@ function Console({ state, api }: { state: DeckState; api: DeckApi }) {
       {/* --- strategy --- */}
       <section className="cd-card">
         <div className="cd-card-head">
-          <Icon name="chevron" />
+          {/* Not a chevron: on the Planner the same right-chevron is a real
+              `<details>` summary, and a glyph cannot mean "expandable" here and
+              "decoration" there. `users` says what this card actually picks. */}
+          <Icon name="users" />
           <h2 className="cd-h2">When it switches, where does it go?</h2>
         </div>
         <fieldset className="cda-opts">

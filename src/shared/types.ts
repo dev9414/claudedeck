@@ -304,6 +304,22 @@ export interface PlanOutcome {
   cost: number;
 }
 
+/**
+ * One start time the optimiser scored on its way to the recommendation, kept so
+ * a "what if I start at X instead" can be answered from the same simulation
+ * rather than a second one. The primary account moves to `anchorAt` with the
+ * rest of the fleet held at its recommended anchors; the minutes are
+ * fleet-wide, exactly as in `PlanOutcome`.
+ */
+export interface AnchorCandidate {
+  /** Epoch ms of the candidate first message. Never in the past. */
+  anchorAt: number;
+  blockedWorkMin: number;
+  blockedPeakMin: number;
+  /** `blockedWorkMin + peakWeight * blockedPeakMin`. Lower is better. */
+  cost: number;
+}
+
 export interface AccountPlan {
   slot: number;
   email: string;
@@ -324,6 +340,14 @@ export interface SessionPlan {
   baseline: PlanOutcome;
   /** Blocked peak minutes the plan avoids versus `baseline`. Can be 0. */
   peakMinutesSaved: number;
+  /**
+   * Every start time still open on `day`, scored, ascending by `anchorAt`, and
+   * always containing the recommended anchor. Absent rather than empty when
+   * there is nothing honest to price -- no accounts, or no observed history --
+   * so a reader must treat missing as "no what-if available", never as "no
+   * alternative helps".
+   */
+  candidates?: AnchorCandidate[];
   /** The reasoning, shown to the user rather than hidden in a score. */
   rationale: string[];
   /**

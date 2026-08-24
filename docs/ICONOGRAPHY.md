@@ -18,7 +18,7 @@ deps at all — see `docs/ARCHITECTURE.md`. An icon library is the softest place
 to break that rule and the easiest one to talk yourself into, because it looks
 like an asset rather than code. It is code: a package, a version, a transitive
 tree, a licence, and a supply-chain surface inside an app that reads OAuth
-credentials off disk. The set below is 34 glyphs of inline SVG. It costs less
+credentials off disk. The set below is 35 glyphs of inline SVG. It costs less
 than the dependency would.
 
 **2. The set has to look like this product.** The ClaudeDeck mark (`assets/logo.svg`)
@@ -75,8 +75,14 @@ centre.
 
 Segments that are neither horizontal nor vertical run between integer points,
 and wherever the shape allows, they run at an exact 45deg. `check`, `x`,
-`chevron`, `chevron-down`, `activity`, `ban` and `search` are pure 45deg —
-`activity` is three consecutive 45deg runs and nothing else.
+`chevron`, `chevron-down`, `chevron-left`, `activity`, `ban` and `search` are
+pure 45deg — `activity` is three consecutive 45deg runs and nothing else.
+
+`chevron-left` is `chevron` mirrored about `x = 12`, and it exists because a
+Back control must not wear the glyph its Next control wears. A direction is
+meaning here, so it gets its own path rather than a `rotate(180deg)` at the call
+site: a transform is invisible to anyone reading the JSX, and the two `chevron`
+buttons that used to sit on one row pointing the same way are what that costs.
 
 ### Circles
 
@@ -191,7 +197,7 @@ whole element. `refresh` is built around that.
 
 ## Adding an icon
 
-1. **Check the union first.** Thirty-four names is already a lot for an app this
+1. **Check the union first.** Thirty-five names is already a lot for an app this
    size. Reusing `activity` for a chart toggle beats drawing a 35th glyph.
 2. **Add the name to `IconName`**, alphabetically. TypeScript will now fail
    until `GLYPHS` has an entry, which is the point.

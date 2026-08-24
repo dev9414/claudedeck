@@ -26,7 +26,7 @@
  *               points are 6.343 and 17.657. Any segment that is neither
  *               horizontal nor vertical runs between integer points, and
  *               wherever the shape allows it runs at an exact 45deg — check, x,
- *               chevron, activity, ban and search are pure 45deg.
+ *               the three chevrons, activity, ban and search are pure 45deg.
  *
  *   circles     A glyph's primary ring is centred on (12,12) with an integral
  *               radius (r = 8 unless noted). Secondary round forms — a head, a
@@ -71,6 +71,7 @@ export type IconName =
   | 'check'
   | 'chevron'
   | 'chevron-down'
+  | 'chevron-left'
   | 'clock'
   | 'copy'
   | 'dot'
@@ -145,6 +146,11 @@ const GLYPHS: Record<IconName, ReactNode> = {
 
   chevron: <path d="M 9 5 L 16 12 L 9 19" />,
   'chevron-down': <path d="M 5 9 L 12 16 L 19 9" />,
+
+  /* `chevron` mirrored about x=12: 9 -> 15 and 16 -> 8. Same two 7-unit 45deg
+     runs, same integer endpoints, so a Back control and a Next control are one
+     shape read in two directions rather than one shape used for both. */
+  'chevron-left': <path d="M 15 5 L 8 12 L 15 19" />,
 
   /* r=8 ring; the hands are one polyline, 4 up then 4 right, keeping 2 units
      clear of the ring's inner edge at r=7. */
