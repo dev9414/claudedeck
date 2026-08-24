@@ -20,7 +20,7 @@
 
 import { execFile } from 'node:child_process';
 import { promises as fsp } from 'node:fs';
-import { hostname } from 'node:os';
+import { homedir, hostname } from 'node:os';
 import { join } from 'node:path';
 import { safeStorage } from 'electron';
 
@@ -84,6 +84,12 @@ import {
 import { type AutoSwitchSnapshot, type PollOutcome, createAutoSwitcher } from '@core/autoswitch';
 import { type LockDeps, CONFIG_STALE_MS, DEFAULT_LOCK_TIMEOUT_MS, withLock } from '@core/locks';
 import { DEFAULT_LOOKBACK_DAYS, buildProfile, flatProfile } from '@core/profile';
+import {
+  claudeFileNames,
+  claudeSearchDirs,
+  isClaudeCodeVersion,
+  vscodeExtensionsRoot,
+} from '@core/claude-cli';
 import { type PlanAccount, planDay } from '@core/planner';
 import { DEFAULT_SCHEDULE, resolveSchedule } from '@core/schedule';
 
@@ -315,14 +321,84 @@ async function locateOnPath(
 }
 
 /** Runs the real CLI. The only place in ClaudeDeck that starts a child process. */
+/**
+ * Find a real Claude Code CLI, or null.
+ *
+ * PATH is only the first place to look. A GUI app inherits a login
+ * environment rather than a shell one, and the most common way to have Claude
+ * Code at all is the VS Code extension, which keeps the binary inside its own
+ * extension directory and never exports it. Each candidate is probed with
+ * `--version` because Claude *Desktop* also installs a `claude.exe`, and
+ * running that instead would fail in a way that looks like our bug.
+ */
+export async function findClaudeCli(
+  env: NodeJS.ProcessEnv,
+  platform: PlatformKind,
+  homeDir: string,
+  override?: string,
+): Promise<{ path: string; version: string } | null> {
+  const probe = async (candidate: string) => {
+    try {
+      if (!(await fsp.stat(candidate)).isFile()) return null;
+    } catch {
+      return null;
+    }
+    const shell = platform === 'windows' && /\.(cmd|bat)$/i.test(candidate);
+    try {
+      const out = await new Promise<string>((resolve, reject) => {
+        execFile(
+          shell ? `"${candidate}"` : candidate,
+          ['--version'],
+          { timeout: 15_000, encoding: 'utf8', windowsHide: true, shell, maxBuffer: 1 << 16 },
+          (error, stdout, stderr) => (error ? reject(error) : resolve(`${stdout}${stderr}`)),
+        );
+      });
+      return isClaudeCodeVersion(out)
+        ? { path: candidate, version: out.trim().split(/\r?\n/)[0] ?? '' }
+        : null;
+    } catch {
+      return null;
+    }
+  };
+
+  // An explicit setting wins outright, and is reported as a failure rather than
+  // silently falling back: if someone named a path, a different binary running
+  // instead is not what they asked for.
+  if (override !== undefined && override.trim().length > 0) return probe(override.trim());
+
+  let extensionDirs: string[] = [];
+  try {
+    extensionDirs = await fsp.readdir(vscodeExtensionsRoot(homeDir, platform));
+  } catch {
+    // No VS Code, or no permission. Not an error: just one fewer place to look.
+  }
+
+  const names = claudeFileNames(platform);
+  for (const dir of claudeSearchDirs({ env, homeDir, platform, extensionDirs })) {
+    for (const name of names) {
+      const hit = await probe(join(dir, name));
+      if (hit !== null) return hit;
+    }
+  }
+  return null;
+}
+
 export function defaultAnchorRunner(
   env: NodeJS.ProcessEnv,
   platform: PlatformKind,
+  homeDir: string = homedir(),
+  override?: string,
 ): AnchorRunner {
   const windows = platform === 'windows';
+  // Resolving walks directories and spawns `--version` probes, so the answer is
+  // cached for the process: it cannot change without an install, and anchoring
+  // should not pay for the search twice.
+  let cached: { path: string; version: string } | null | undefined;
+
   return async (prompt, timeoutMs) => {
-    const found = await locateOnPath(CLAUDE_BIN, env, windows);
-    if (found === null) return { code: -1, stdout: '', stderr: '', notFound: true };
+    if (cached === undefined) cached = await findClaudeCli(env, platform, homeDir, override);
+    if (cached === null) return { code: -1, stdout: '', stderr: '', notFound: true };
+    const found = cached.path;
 
     // A `.cmd`/`.bat` shim is a script, not an image: `CreateProcess` cannot run
     // one. Those go through the shell; everything else, including every POSIX
@@ -432,11 +508,19 @@ export async function createServices(options: CreateServicesOptions = {}): Promi
   const paths = resolvePaths(env, options.homeDir);
   const platform = detectPlatform(process.platform, env);
   const version = options.version ?? '0.0.0';
-  const runAnchor = options.runAnchor ?? defaultAnchorRunner(env, platform);
-
   await fsp.mkdir(paths.deckHome, { recursive: true });
 
   const settings: SettingsStore = createSettingsStore(paths.deckHome);
+
+  // Constructed after settings so an explicit `planner.claudePath` is honoured.
+  const runAnchor =
+    options.runAnchor ??
+    defaultAnchorRunner(
+      env,
+      platform,
+      options.homeDir ?? homedir(),
+      settings.get().planner.claudePath,
+    );
   await settings.load();
 
   /**
@@ -1172,7 +1256,9 @@ export async function createServices(options: CreateServicesOptions = {}): Promi
           ok: false,
           slot,
           command,
-          error: `\`${CLAUDE_BIN}\` is not on ClaudeDeck's PATH, so there is nothing to send the anchoring message with. Install Claude Code (npm i -g @anthropic-ai/claude-code), or start ClaudeDeck from a terminal where \`${CLAUDE_BIN} --version\` works, then try again.`,
+          error:
+            `ClaudeDeck could not find the Claude Code CLI. It looked on PATH, in npm's global bin, in ~/.claude/local, and inside the VS Code extension (resources/native-binary) — and it only accepts a binary whose \`--version\` says "Claude Code", so Claude Desktop's \`claude\` does not count. ` +
+            `If you have it somewhere else, set its full path in Settings (planner.claudePath) or start ClaudeDeck from a terminal where \`${CLAUDE_BIN} --version\` works.`,
         };
       }
       if (run.timedOut) {

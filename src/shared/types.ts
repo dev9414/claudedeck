@@ -253,6 +253,15 @@ export interface PlannerConfig {
   autoAnchor: boolean;
   /** The prompt used when anchoring. Kept tiny on purpose. */
   anchorPrompt: string;
+  /**
+   * Full path to the Claude Code CLI, when it cannot be found automatically.
+   *
+   * ClaudeDeck searches PATH, npm's global bin, `~/.claude/local` and the VS
+   * Code extension's bundled binary, and only accepts one whose `--version`
+   * identifies Claude Code — Claude Desktop ships a `claude` too. This is the
+   * escape hatch for an install in none of those places. Empty means "search".
+   */
+  claudePath?: string;
 }
 
 /**

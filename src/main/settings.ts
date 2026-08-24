@@ -382,6 +382,11 @@ export function normalizeSettings(raw: unknown): NormalizedSettings {
     remindLeadMin: num(rawPlanner['remindLeadMin'], base.planner.remindLeadMin, 'remindLeadMin'),
     autoAnchor: bool(rawPlanner['autoAnchor'], base.planner.autoAnchor),
     anchorPrompt: anchorPrompt(rawPlanner['anchorPrompt'], base.planner.anchorPrompt),
+    // An override for an install ClaudeDeck cannot find. Kept absent rather
+    // than empty-string so "unset" and "set to nothing" stay distinguishable.
+    ...(typeof rawPlanner['claudePath'] === 'string' && rawPlanner['claudePath'].trim().length > 0
+      ? { claudePath: rawPlanner['claudePath'].trim() }
+      : {}),
   };
 
   const settings: Settings = {
