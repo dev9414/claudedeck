@@ -27,6 +27,7 @@ import type {
   WorkSchedule,
 } from '@shared/types';
 import { DEFAULT_SCHEDULE, formatHHMM, resolveSchedule, validateSchedule } from '@core/schedule';
+import { scoredPeakMinutes } from '@core/planner';
 import { useDeckState } from '../hooks/useDeckState';
 import { Badge } from '../components/Badge';
 import { Button } from '../components/Button';
@@ -42,6 +43,15 @@ import { formatClock } from '../charts/scales';
 import './views.css';
 
 const MIN_PER_HOUR = 60;
+const DAY_MS = 24 * MIN_PER_HOUR * 60_000;
+
+/**
+ * How close a recommended anchor has to be before the instruction is "now"
+ * rather than a clock time. The plan is recomputed on each poll, so `now` drifts
+ * past its own anchor between polls -- and a time printed at a user for whom it
+ * has passed is the whole reason this page was reported.
+ */
+const START_NOW_MS = 5 * 60_000;
 
 /**
  * Fallbacks for a settings file written before the planner existed. They mirror
@@ -116,6 +126,33 @@ function minutesText(value: number): string {
   const rest = total % MIN_PER_HOUR;
   if (rest === 0) return `${hours} hour${hours === 1 ? '' : 's'}`;
   return `${hours}h ${rest}m`;
+}
+
+/** An observed 5-hour window: derived from a snapshot, so it needs checking. */
+interface ObservedWindow {
+  anchorAt: number;
+  resetsAt: number;
+  /** True while `now` is still inside it. */
+  open: boolean;
+}
+
+/**
+ * The observed anchor, if it is really an observation.
+ *
+ * It is derived as `resetsAt - 5h` from the last snapshot good enough to show,
+ * which can be arbitrarily stale, and this page labels it with the word
+ * "measured" -- the app's own word for "this really happened". Two derivations
+ * do not earn it: a window that has not started yet, and one whose snapshot
+ * predates the window it describes. Both are dropped, and the caller says
+ * "nothing observed", which is true and checkable against the clock beside it.
+ */
+function observedWindow(entry: AnchorObservation | undefined, now: number): ObservedWindow | null {
+  if (entry === undefined) return null;
+  const { anchorAt, observedAt } = entry;
+  if (!Number.isFinite(anchorAt) || !Number.isFinite(observedAt)) return null;
+  if (anchorAt > now || observedAt < anchorAt) return null;
+  const resetsAt = anchorAt + FIVE_HOUR_MS;
+  return { anchorAt, resetsAt, open: now < resetsAt };
 }
 
 /** The index of the schedule that governs `weekday`, matching `resolveSchedule`. */
@@ -288,6 +325,23 @@ export function Planner() {
   // about an invented day rather than a finding about this one.
   const observedHours = (plan?.profile.samples ?? []).filter((count) => count > 0).length;
 
+  const anchorBySlot = new Map((anchors ?? []).map((entry) => [entry.slot, entry]));
+  const observedFor = (slot: number): ObservedWindow | null =>
+    observedWindow(anchorBySlot.get(slot), now);
+
+  /**
+   * Which day the plan is for, measured against the day the user is living in.
+   * `planDay` hands back tomorrow once today's anchors have all passed -- that
+   * is the only answer left that can be acted on -- so every clock time on this
+   * page has to say which day it belongs to.
+   */
+  const dayOffset = Math.round((dayStartMs - localMidnight(now)) / DAY_MS);
+  /** For a sentence: "no start time beats any other <dayWord>". */
+  const dayWord =
+    dayOffset === 0 ? 'today' : dayOffset === 1 ? 'tomorrow' : `on ${plan?.day ?? 'the day planned'}`;
+  /** For a clock time that needs qualifying: "07:50 (tomorrow)". */
+  const dayTag =
+    dayOffset === 0 ? '' : dayOffset === 1 ? ' (tomorrow)' : ` (${plan?.day ?? 'another day'})`;
 
   /**
    * The one-line answer, chosen so the page opens with what to do rather than
@@ -312,27 +366,69 @@ export function Planner() {
     }
     const first = plan.accounts[0];
     if (!first) return { text: 'No account to plan for.', sub: 'Add an account and come back.' };
+    // Already anchored. The window's start was fixed by a message that has been
+    // sent, and no plan can move it, so naming a start time here would be
+    // naming something the user cannot do.
+    const openWindow = dayOffset === 0 ? observedFor(first.slot) : null;
+    if (openWindow !== null && openWindow.open) {
+      return {
+        text: `Your window is already open until ${formatClock(openWindow.resetsAt)}.`,
+        sub: `Your first message at ${formatClock(openWindow.anchorAt)} set it, and nothing can move it now — the times below apply to your next fresh window.`,
+      };
+    }
     if (plan.peakMinutesSaved <= 0) {
       return {
         text: 'Just start when you start.',
-        sub: 'No start time beats any other today, so there is nothing to plan around.',
+        sub: `No start time beats any other ${dayWord}, so there is nothing to plan around.`,
       };
     }
-    const reset = first.outcome.windows[0]?.end ?? first.outcome.anchorAt + FIVE_HOUR_MS;
+    const anchorAt = first.outcome.anchorAt;
+    const reset = first.outcome.windows[0]?.end ?? anchorAt + FIVE_HOUR_MS;
+    // `peakMinutesSaved` is a delta against starting when work starts, not the
+    // peak the plan protects -- the two differ by hours, and the page used to
+    // print the smaller one as though it were the larger.
+    const peakMin = scoredPeakMinutes(plan.schedule, dayStartMs);
+    const protectedMin = peakMin - first.outcome.blockedPeakMin;
+    const saved = minutesText(plan.peakMinutesSaved);
+    const startOfWork = formatHHMM(governing.work.start);
     return {
-      text: `Send your first message at ${formatClock(first.outcome.anchorAt)}.`,
-      sub: `That puts a reset at ${formatClock(reset)} and keeps ${minutesText(plan.peakMinutesSaved)} of your peak unblocked.`,
+      text:
+        dayOffset === 0
+          ? anchorAt - now <= START_NOW_MS
+            ? 'Start now — nothing later today beats it.'
+            : `Send your first message at ${formatClock(anchorAt)}.`
+          : `${dayOffset === 1 ? 'Tomorrow' : plan.day}: send your first message at ${formatClock(anchorAt)}.`,
+      sub:
+        peakMin <= 0 || protectedMin <= 0
+          ? `That puts a reset at ${formatClock(reset)}, leaving ${saved} more of your peak unblocked than starting at ${startOfWork} would.`
+          : protectedMin >= peakMin
+            ? `That puts a reset at ${formatClock(reset)}, keeping all ${minutesText(peakMin)} of your peak unblocked — ${saved} more than starting at ${startOfWork} would.`
+            : `That puts a reset at ${formatClock(reset)}, keeping ${minutesText(protectedMin)} of the ${minutesText(peakMin)} in your peak unblocked — ${saved} more than starting at ${startOfWork} would.`,
     };
   })();
 
-  const anchorBySlot = new Map((anchors ?? []).map((entry) => [entry.slot, entry]));
-  const lanes: WindowPlanLane[] = (plan?.accounts ?? []).map((account) => ({
-    slot: account.slot,
-    label: account.alias ?? account.email,
-    sub: `slot ${account.slot}`,
-    outcome: account.outcome,
-    observedAnchorAt: anchorBySlot.get(account.slot)?.anchorAt,
-  }));
+  /** The time reminders would fire for, when there is one left to remember. */
+  const anchorToRemember = ((): string | null => {
+    const first = plan?.accounts[0];
+    if (plan === null || first === undefined || plan.peakMinutesSaved <= 0) return null;
+    const openWindow = dayOffset === 0 ? observedFor(first.slot) : null;
+    if (openWindow !== null && openWindow.open) return null;
+    return `${formatClock(first.outcome.anchorAt)}${dayTag}`;
+  })();
+
+  const lanes: WindowPlanLane[] = (plan?.accounts ?? []).map((account) => {
+    const observed = observedFor(account.slot);
+    return {
+      slot: account.slot,
+      label: account.alias ?? account.email,
+      sub: `slot ${account.slot}`,
+      outcome: account.outcome,
+      // Only a window that has actually opened. The ring is drawn as an
+      // observation, and one to the right of the chart's own "now" line is a
+      // claim about the future.
+      ...(observed === null ? {} : { observedAnchorAt: observed.anchorAt }),
+    };
+  });
 
   const chartProfile = profile ?? plan?.profile ?? null;
   const dayContainsNow = now >= dayStartMs && now < dayStartMs + 24 * MIN_PER_HOUR * 60_000;
@@ -365,11 +461,13 @@ export function Planner() {
     }
   };
 
-  const setEnabled = async (next: boolean) => {
+  const patchPlanner = async (patch: Partial<typeof cfg>) => {
     setSaveError(null);
-    const result = await api.updateSettings({ planner: { ...cfg, enabled: next } });
+    const result = await api.updateSettings({ planner: { ...cfg, ...patch } });
     if (!result.ok) setSaveError(result.error);
   };
+
+  const setEnabled = (next: boolean) => patchPlanner({ enabled: next });
 
   return (
     <div className="cd-view">
@@ -379,7 +477,20 @@ export function Planner() {
           Where to put the first message of the day, so a reset lands where you need one.
         </p>
         <span className="cd-spacer" />
-        {plan ? <Badge tone="neutral" icon="clock">{`Plan for ${plan.day}`}</Badge> : null}
+        {cfg.enabled ? null : (
+          <Badge tone="warning" icon="pause" title="The plan is still computed; reminders are not sent.">
+            Planner off
+          </Badge>
+        )}
+        {plan ? (
+          <Badge tone="neutral" icon="clock">
+            {dayOffset === 0
+              ? 'Plan for today'
+              : dayOffset === 1
+                ? 'Plan for tomorrow'
+                : `Plan for ${plan.day}`}
+          </Badge>
+        ) : null}
         {state.demoMode ? <Badge tone="info">Demo data</Badge> : null}
       </header>
 
@@ -388,11 +499,23 @@ export function Planner() {
           thing only the user can supply was the hardest thing to find. */}
       <section className="cd-answer" aria-labelledby="cd-pl-answer">
         <h2 className="cd-sr-only" id="cd-pl-answer">
-          Today
+          Your next start time
         </h2>
         <p className="cd-answer-line">{headline.text}</p>
         {headline.sub ? <p className="cd-answer-sub">{headline.sub}</p> : null}
         <div className="cd-answer-actions">
+          {/* `description` renders under the label; `hint` is only a title
+              attribute, so the sentence explaining the switch reached nobody. */}
+          <Toggle
+            checked={cfg.enabled}
+            onChange={(next) => void setEnabled(next)}
+            label={cfg.enabled ? 'Planner on' : 'Planner off'}
+            description={
+              cfg.enabled
+                ? 'Reminders arrive before a recommended start time.'
+                : 'The plan below is still computed, but no reminders are sent.'
+            }
+          />
           {!cfg.configured ? (
             <Button variant="primary" icon="clock" onClick={() => setHoursOpen(true)}>
               Set my hours
@@ -417,6 +540,14 @@ export function Planner() {
             </p>
           </details>
         </div>
+        {cfg.enabled ? null : (
+          <p className="cd-answer-sub" role="note">
+            <Icon name="pause" size={12} />{' '}
+            {anchorToRemember === null
+              ? 'Reminders are off, so nothing will tell you when to start.'
+              : `Reminders are off — you will have to remember ${anchorToRemember} yourself.`}
+          </p>
+        )}
       </section>
 
       {error ? (
@@ -532,7 +663,7 @@ export function Planner() {
                 </p>
               ) : plan.peakMinutesSaved === 0 ? (
                 <p className="cd-secondary">
-                  Anchoring would not help today. On the simulated day, no start time keeps more of
+                  {`Anchoring would not help ${dayWord}.`} On the simulated day, no start time keeps more of
                   your peak hours unblocked than simply beginning work at{' '}
                   {formatHHMM(governing.work.start)} would, so there is nothing to gain by waiting or
                   by starting early.
@@ -546,7 +677,7 @@ export function Planner() {
               {plan.accounts.map((account) => {
                 const first = account.outcome.windows[0];
                 const reset = first ? first.end : account.outcome.anchorAt + FIVE_HOUR_MS;
-                const observed = anchorBySlot.get(account.slot);
+                const observed = observedFor(account.slot);
                 const result = anchorResults[account.slot];
                 const confirmingThis = confirming === account.slot;
                 return (
@@ -559,7 +690,9 @@ export function Planner() {
                     <ul className="cd-forecast-list">
                       <li>
                         <Icon name="clock" size={12} />
-                        <strong>{`Send the first message at ${formatClock(account.outcome.anchorAt)}`}</strong>
+                        <strong>{`Send the first message at ${formatClock(
+                          account.outcome.anchorAt,
+                        )}${dayTag}`}</strong>
                         <span>estimate</span>
                       </li>
                       <li>
@@ -568,13 +701,15 @@ export function Planner() {
                         <span>5 hours after the anchor</span>
                       </li>
                       <li>
-                        <Icon name={observed ? 'check' : 'minus'} size={12} />
+                        <Icon name={observed === null ? 'minus' : 'check'} size={12} />
                         <strong>
-                          {observed
-                            ? `Today's window actually opened at ${formatClock(observed.anchorAt)}`
-                            : 'No open window observed for this account'}
+                          {observed === null
+                            ? 'No window observed open for this account'
+                            : observed.open
+                              ? `Its window opened at ${formatClock(observed.anchorAt)} and resets at ${formatClock(observed.resetsAt)}`
+                              : `Its last window opened at ${formatClock(observed.anchorAt)} and has since reset`}
                         </strong>
-                        <span>{observed ? 'measured' : 'nothing to measure yet'}</span>
+                        <span>{observed === null ? 'nothing to measure yet' : 'measured'}</span>
                       </li>
                     </ul>
                     <p className="cd-secondary">{account.note}</p>
@@ -679,20 +814,58 @@ export function Planner() {
             />
           )}
 
+          {/* These were previously described in a sentence and settable nowhere,
+              so reminders could not be turned off and auto-anchoring — the whole
+              opt-in — could not be turned on at all. */}
           <section className="cd-card" aria-labelledby="cd-pl-switch">
             <div className="cd-card-head">
               <Icon name="settings" />
               <h2 className="cd-h2" id="cd-pl-switch">
-                Planner
+                Reminders and anchoring
               </h2>
             </div>
+
             <Toggle
-              checked={cfg.enabled}
-              onChange={(next) => void setEnabled(next)}
-              label="Plan my session windows"
-              description={`Peak minutes count ${cfg.peakWeight}x a normal working minute when scoring a plan. Reminders ${
-                cfg.remind ? `arrive ${cfg.remindLeadMin} minutes before an anchor` : 'are off'
-              }; automatic anchoring is ${cfg.autoAnchor ? 'on' : 'off'}.`}
+              checked={cfg.remind}
+              disabled={!cfg.enabled}
+              onChange={(next) => void patchPlanner({ remind: next })}
+              label="Remind me before a start time"
+              description={`A desktop notification shortly before the recommended first message.${
+                cfg.enabled ? '' : ' The planner is off, so none is sent.'
+              }`}
+            />
+
+            <label className="cd-field cd-field--inline">
+              <span className="cd-field-label">Minutes of warning</span>
+              <input
+                type="number"
+                className="cd-input cd-input--num"
+                min={0}
+                max={120}
+                step={5}
+                value={cfg.remindLeadMin}
+                disabled={!cfg.enabled || !cfg.remind}
+                onChange={(e) => {
+                  const next = Number(e.target.value);
+                  // An empty field parses to NaN mid-edit; ignore it rather than
+                  // writing a broken value on every keystroke.
+                  if (Number.isFinite(next)) void patchPlanner({ remindLeadMin: next });
+                }}
+              />
+            </label>
+
+            <Toggle
+              checked={cfg.autoAnchor}
+              disabled={!cfg.enabled || state.settings.safeMode}
+              onChange={(next) => void patchPlanner({ autoAnchor: next })}
+              label="Anchor automatically"
+              description={`Sends "${cfg.anchorPrompt}" through Claude Code at the recommended time, without asking. That is a real message and spends a little of the account's own quota — off unless you turn it on.${
+                state.settings.safeMode
+                  ? ' Safe mode is on, so nothing would be sent.'
+                  : cfg.enabled
+                    ? ''
+                    : ' The planner is off, so nothing is sent.'
+              }`}
             />
           </section>
         </div>

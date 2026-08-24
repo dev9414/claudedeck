@@ -80,7 +80,12 @@ export function TitleBar({
         </button>
       )}
 
-      {account ? <UsageStatusBadge status={account.usageStatus} /> : null}
+      {/* Only when there is something to act on. This badge reports whether
+          usage could be *read*, never whether quota is left, so a permanent
+          green pill in the one place visible from every screen read as a health
+          verdict — beside meters that said otherwise. A clean poll is now
+          silent chrome; every other state still shows. */}
+      {account && account.usageStatus !== 'ok' ? <UsageStatusBadge status={account.usageStatus} /> : null}
 
       {safeMode ? (
         <Badge tone="warning" icon="alert-triangle" title="Every disk write is refused while safe mode is on.">

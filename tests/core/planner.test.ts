@@ -24,6 +24,7 @@ import {
   candidateAnchors,
   fleetCost,
   planDay,
+  scoredPeakMinutes,
   simulateFleet,
 } from '@core/planner';
 import { MIN_ACTIONABLE_CONFIDENCE, emptyProfile } from '@core/profile';
@@ -45,6 +46,11 @@ const DAY_START = Date.parse('2026-08-24T00:00:00.000Z') - TZ * MINUTE;
 
 /** A local clock time on the planned day, as epoch ms. */
 const at = (h: number, m = 0): number => DAY_START + h * HOUR + m * MINUTE;
+
+const DAY = 24 * HOUR;
+
+/** The same clock time on the day after the planned one. */
+const nextDayAt = (h: number, m = 0): number => at(h, m) + DAY;
 
 /** A local clock time as minutes from midnight, for a `DaySpan`. */
 const hm = (h: number, m = 0): number => h * 60 + m;
@@ -103,6 +109,14 @@ function simInput(over: Partial<SimInput> = {}): SimInput {
   };
 }
 
+/**
+ * `nowMs` defaults to the night before the planned day, which is what makes the
+ * expectations below arithmetic rather than a recording: every anchor on the day
+ * is still ahead, so nothing is clamped away. Omitting it would hand the plan
+ * the machine's wall clock, and the same test would pass or fail depending on
+ * the hour it ran at -- which is exactly the bug the clamping exists to fix,
+ * seen from the other side.
+ */
 function planInput(over: Partial<PlanInput> = {}): PlanInput {
   return {
     dayStartMs: DAY_START,
@@ -111,6 +125,7 @@ function planInput(over: Partial<PlanInput> = {}): PlanInput {
     accounts: [acct(1, PEAK_HEAVY)],
     peakWeight: 3,
     scheduleConfigured: true,
+    nowMs: DAY_START - HOUR,
     ...over,
   };
 }
@@ -306,6 +321,9 @@ describe('planDay: the recommended anchor', () => {
   });
 
   it('gives the identical plan twice, without Math.random or the ambient clock', () => {
+    // The clock assertion is about `nowMs`: given the instant, nothing reads
+    // `Date.now()`, so a plan on screen never shifts under the user between two
+    // renders of the same input.
     const random = vi.spyOn(Math, 'random');
     const clock = vi.spyOn(Date, 'now');
     const first = planDay(planInput());
@@ -319,6 +337,195 @@ describe('planDay: the recommended anchor', () => {
     expect(JSON.stringify(second)).toBe(JSON.stringify(first));
     expect(randomCalls).toBe(0);
     expect(clockCalls).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The clock
+// ---------------------------------------------------------------------------
+
+/**
+ * The planner used to answer "when do I send my first message today" with a
+ * time that had passed hours ago: the candidate set was built from the schedule
+ * alone. An anchor is a message the user has to actually send, so the tests
+ * below pin the two honest answers -- the earliest anchor still open, and, when
+ * there is none, tomorrow.
+ */
+describe('planDay: an anchor in the past is not a recommendation', () => {
+  const sweep = [
+    { label: 'the moment work starts', nowMs: at(9) },
+    { label: 'mid-morning, off-grid', nowMs: at(10, 7) },
+    { label: 'the middle of the peak', nowMs: at(12) },
+    { label: 'five minutes of peak left', nowMs: at(14, 55) },
+    { label: 'the peak is over', nowMs: at(16) },
+    { label: 'the working day is over', nowMs: at(19, 30) },
+  ];
+
+  it.each(sweep)('never names an anchor before now: $label', ({ nowMs }) => {
+    const plan = planDay(planInput({ nowMs }));
+    expect(plan.accounts).not.toHaveLength(0);
+    for (const account of plan.accounts) {
+      expect(account.outcome.anchorAt).toBeGreaterThanOrEqual(nowMs);
+    }
+  });
+
+  it('leaks no past anchor into a fleet plan that does beat the baseline', () => {
+    // Coordinate descent keeps an account where it started when nothing beats
+    // it, so a descent that started at 09:00 could hand back 09:00 for one
+    // account while the other improved -- a plan that beats the baseline and is
+    // still impossible to follow.
+    const schedule = sched({
+      work: { start: hm(9), end: hm(19) },
+      peak: { start: hm(12), end: hm(16) },
+    });
+    const plan = planDay(
+      planInput({
+        schedule,
+        accounts: [acct(1, flat(50)), acct(2, flat(50))],
+        nowMs: at(11),
+      }),
+    );
+
+    expect(plan.accounts).toHaveLength(2);
+    for (const account of plan.accounts) {
+      expect(account.outcome.anchorAt).toBeGreaterThanOrEqual(at(11));
+    }
+  });
+
+  it('recommends the earliest anchor still open once the morning has gone', () => {
+    // 11:00 onwards, no anchor beats the 09:00 start that is no longer
+    // available: anchoring at 11:00 costs 540 against the baseline's 240. So
+    // the plan recommends starting now and says the comparison is moot, rather
+    // than printing 08:15 at a user for whom 08:15 has been and gone.
+    const plan = planDay(planInput({ nowMs: at(11) }));
+    const planned = only(plan.accounts).outcome;
+
+    expect(plan.day).toBe('2026-08-24');
+    expect(planned.anchorAt).toBe(at(11));
+    expect(plan.baseline.anchorAt).toBe(at(9));
+    expect(plan.baseline.blockedPeakMin).toBe(60);
+    // Starting now is worse than the 09:00 start would have been, and a saving
+    // is never reported as negative -- nor as a benefit.
+    expect(plan.peakMinutesSaved).toBe(0);
+    expect(only(plan.accounts).note).toMatch(/11:00 is simply the earliest anchor still open/);
+    expect(only(plan.rationale)).toMatch(/No anchor still open beats simply starting now/);
+    // And no line comparing a from-now figure against a whole-day one.
+    expect(plan.rationale.some((line) => /the same as with no anchoring/.test(line))).toBe(false);
+  });
+
+  it("plans tomorrow, and says so, once today's anchors have all passed", () => {
+    const plan = planDay(planInput({ nowMs: at(15, 1) }));
+    const planned = only(plan.accounts).outcome;
+
+    expect(plan.day).toBe('2026-08-25');
+    expect(planned.anchorAt).toBe(nextDayAt(8, 15));
+    expect(planned.anchorAt).toBeGreaterThan(at(15, 1));
+    expect(plan.baseline.anchorAt).toBe(nextDayAt(9));
+    // The same plan as the morning's, one day over: nothing about the advice
+    // changed, only which day it is for.
+    expect(plan.peakMinutesSaved).toBe(45);
+    expect(only(plan.rationale)).toMatch(
+      /Every start time worth taking on 2026-08-24 has already passed, so this is 2026-08-25's plan/,
+    );
+  });
+
+  it('names the day it planned even with no accounts to plan for', () => {
+    const plan = planDay(planInput({ accounts: [], nowMs: at(19) }));
+    expect(plan.day).toBe('2026-08-25');
+    expect(only(plan.rationale)).toMatch(/this is 2026-08-25's plan/);
+    expect(only(plan.rationale, 1)).toMatch(/No accounts are set up/);
+  });
+
+  it('falls back to the wall clock when it is given no instant', () => {
+    // Callers that forget the instant must not get a plan for a time that has
+    // passed; the wall clock is the safer default, and it is the only thing
+    // `Date.now()` is read for.
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(at(15, 1));
+    try {
+      const plan = planDay(planInput({ nowMs: undefined }));
+      expect(plan.day).toBe('2026-08-25');
+      expect(clock).toHaveBeenCalled();
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  it('plans a day that is already over as history, not as tomorrow', () => {
+    // `deck plan --day 2026-08-24` run a week later is analysis, and clamping
+    // it would leave nothing to analyse.
+    const plan = planDay(planInput({ nowMs: DAY_START + 7 * DAY }));
+    expect(plan.day).toBe('2026-08-24');
+    expect(only(plan.accounts).outcome.anchorAt).toBe(at(8, 15));
+  });
+});
+
+describe('candidateAnchors: the clock', () => {
+  it('offers nothing earlier than now, on the same five-minute grid', () => {
+    const anchors = candidateAnchors(simInput(), at(10, 2));
+
+    expect(only(anchors)).toBe(at(10, 5));
+    expect(only(anchors, anchors.length - 1)).toBe(at(15));
+    expect(anchors.every((t) => t >= at(10, 2))).toBe(true);
+  });
+
+  it('runs out when now is past the last anchor worth taking', () => {
+    expect(candidateAnchors(simInput(), at(15))).toHaveLength(1);
+    expect(candidateAnchors(simInput(), at(15, 1))).toEqual([]);
+  });
+
+  it('leaves a day still ahead, or already over, exactly as it was', () => {
+    const unclamped = candidateAnchors(simInput());
+
+    expect(candidateAnchors(simInput(), DAY_START)).toEqual(unclamped);
+    expect(candidateAnchors(simInput(), at(48))).toEqual(unclamped);
+  });
+
+  it('drops an off-grid start of work that has passed', () => {
+    const schedule = sched({
+      work: { start: hm(2, 2), end: hm(10) },
+      peak: { start: hm(3), end: hm(5) },
+    });
+
+    expect(candidateAnchors(simInput({ schedule }))).toContain(at(2, 2));
+    const later = candidateAnchors(simInput({ schedule }), at(2, 30));
+    expect(later).not.toContain(at(2, 2));
+    expect(only(later)).toBe(at(2, 30));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Peak minutes: the delta and the absolute are different numbers
+// ---------------------------------------------------------------------------
+
+describe('scoredPeakMinutes', () => {
+  it.each([
+    ['a peak inside working hours', sched(), 240],
+    ['a peak trimmed to fit', sched({ work: { start: hm(9), end: hm(12) } }), 60],
+    [
+      'a peak outside working hours',
+      sched({ work: { start: hm(9), end: hm(12) }, peak: { start: hm(14), end: hm(16) } }),
+      0,
+    ],
+    [
+      'a night shift crossing midnight',
+      sched({ work: { start: hm(20), end: hm(4) }, peak: { start: hm(22), end: hm(2) } }),
+      240,
+    ],
+  ])('measures %s', (_label, schedule, expected) => {
+    expect(scoredPeakMinutes(schedule, DAY_START)).toBe(expected);
+  });
+
+  it('is the denominator peakMinutesSaved is not', () => {
+    // `peakMinutesSaved` is a delta against a 09:00 start; the peak the plan
+    // protects is the peak minus what stays blocked. Two different numbers, and
+    // a UI that prints the smaller as the larger undersells the plan sixfold.
+    const plan = planDay(planInput());
+    const planned = only(plan.accounts).outcome;
+
+    expect(scoredPeakMinutes(plan.schedule, DAY_START)).toBe(240);
+    expect(planned.blockedPeakMin).toBe(15);
+    expect(scoredPeakMinutes(plan.schedule, DAY_START) - planned.blockedPeakMin).toBe(225);
+    expect(plan.peakMinutesSaved).toBe(45);
   });
 });
 

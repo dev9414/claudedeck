@@ -7,6 +7,13 @@
  * would perform, and that manifest is shown and confirmed before anything
  * touches disk. Hiding it would make the one destructive action in the app the
  * least legible one.
+ *
+ * Two invariants this screen kept breaking, both now held in one place:
+ * every figure states percent *used*, the direction the bars, the API and
+ * Automation already use; and a tile's status is judged against the window's
+ * own clock — how far in we are, when it resets — never against a flat
+ * percentage, or almost everything reads amber and amber stops meaning
+ * anything.
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
@@ -14,6 +21,7 @@ import type {
   Account,
   Forecast,
   HistoryPoint,
+  SwitchRequest,
   SwitchStrategy,
   SwitchResult,
   UsageWindow,
@@ -25,10 +33,11 @@ import { Button } from '../components/Button';
 import { EmptyState } from '../components/EmptyState';
 import { Icon } from '../components/Icon';
 import { Modal } from '../components/Modal';
-import { ChartFrame, statusForPct, type ChartStatus } from '../charts/ChartFrame';
+import { ChartFrame, STATUS_THRESHOLDS, statusForPct, type ChartStatus } from '../charts/ChartFrame';
 import { StatTile } from '../charts/StatTile';
 import { UsageMeter } from '../charts/UsageMeter';
 import { UsageTimeline } from '../charts/UsageTimeline';
+import { formatPct } from '../charts/scales';
 import './views.css';
 
 const HOUR = 3_600_000;
@@ -67,8 +76,16 @@ function round1(value: number): number {
   return Math.round(value * 10) / 10;
 }
 
+/**
+ * The same formatter the meters use.
+ *
+ * These two disagreed: the tile printed one decimal while the bar below it
+ * rounded to a whole number, so a 61.5% window read "61.5%" up here and "62%"
+ * down there. One formatter, one answer -- the point of this view is that its
+ * numbers agree with each other.
+ */
 function pctText(value: number): string {
-  return `${round1(value)}%`;
+  return formatPct(value);
 }
 
 /** Coarse, honest duration: never more precise than the estimate behind it. */
@@ -87,11 +104,17 @@ function ago(then: number, now: number): string {
   return delta < 60_000 ? 'just now' : `${duration(delta)} ago`;
 }
 
+/** An ISO instant as epoch ms, or null when the API reported nothing usable. */
+function instant(iso: string | undefined): number | null {
+  if (!iso) return null;
+  const at = Date.parse(iso);
+  return Number.isFinite(at) ? at : null;
+}
+
 /** Countdown to a window reset, or an honest "not reported". */
 function resetText(iso: string | undefined, now: number): string {
-  if (!iso) return 'not reported';
-  const at = Date.parse(iso);
-  if (!Number.isFinite(at)) return 'not reported';
+  const at = instant(iso);
+  if (at === null) return 'not reported';
   return at <= now ? 'due now' : `in ${duration(at - now)}`;
 }
 
@@ -106,6 +129,101 @@ function accountLabel(account: Account): string {
 function messageOf(cause: unknown): string {
   if (cause instanceof Error) return cause.message;
   return typeof cause === 'string' ? cause : 'The main process did not answer.';
+}
+
+/** The shell routes on the hash, so a view can hand over without a prop. */
+function goToAccounts(): void {
+  if (typeof window !== 'undefined') window.location.hash = '#/accounts';
+}
+
+/**
+ * A window's status, judged against how far into the window we are.
+ *
+ * A flat percentage paints a healthy window amber: 62% of a 7-day window that
+ * is already 64% elapsed is exactly on budget, and calling that a warning makes
+ * amber mean nothing. `expectedPct`/`aheadOfPace` carry the comparison the
+ * forecaster already did, so amber here means "spending faster than the window
+ * refills" — the only reading that carries information. Above the critical line
+ * the absolute number gates regardless of pace: nearly spent is nearly spent.
+ * With no reported reset there is no elapsed fraction to compare, so the flat
+ * thresholds stand in and the tile says the pace is unknown.
+ */
+function paceStatus(usedPct: number, forecast: Forecast | null): ChartStatus {
+  if (usedPct >= STATUS_THRESHOLDS.critical) return 'critical';
+  if (forecast?.expectedPct === undefined) return statusForPct(usedPct);
+  return forecast.aheadOfPace ? statusForPct(usedPct) : 'good';
+}
+
+/**
+ * How urgent a projection that lands *before* its own reset is, measured
+ * against the time left in the window rather than the clock: "half the time
+ * left" is the same news in a 5-hour window and a 7-day one.
+ */
+function projectionStatus(exhaustIn: number, resetIn: number | null): ChartStatus {
+  if (exhaustIn < HOUR) return 'critical';
+  if (resetIn === null || resetIn <= 0) return exhaustIn < 4 * HOUR ? 'serious' : 'warning';
+  return exhaustIn / resetIn < 0.34 ? 'serious' : 'warning';
+}
+
+interface TileCopy {
+  value: string;
+  sub: string;
+  status: ChartStatus;
+}
+
+/**
+ * The projection tile's states.
+ *
+ * The one the old tile got wrong is the good news: a projected 100% that lands
+ * after the window's own reset cannot happen, because the reset wipes the
+ * counter first — raising it as a warning was arithmetically impossible. It is
+ * stated as good news instead, with the raw projection kept in the subtitle
+ * where it can still be checked.
+ */
+function projectionTile(
+  forecasts: Forecast[] | null,
+  forecast: Forecast | null,
+  exhaustionMs: number | null,
+  windowLabel: string,
+  resetIn: number | null,
+  now: number,
+): TileCopy {
+  if (forecasts === null) {
+    return { value: 'Loading', sub: 'Fitting the recent burn rate.', status: 'neutral' };
+  }
+  if (forecast === null) {
+    return {
+      value: 'No projection',
+      sub: 'Not enough history yet — two polls inside one window are needed.',
+      status: 'neutral',
+    };
+  }
+  const fit = describeFit(forecast.burn.confidence);
+  if (exhaustionMs === null) {
+    return { value: 'Not on this pace', sub: `${windowLabel} · ${fit}`, status: 'good' };
+  }
+  const left = Math.max(0, exhaustionMs - now);
+  if (forecast.lastsToReset) {
+    const resets = resetIn === null || resetIn <= 0 ? '' : `, after the ${windowLabel} reset in ${duration(resetIn)}`;
+    return {
+      value: 'Resets before it runs out',
+      sub: `Estimate: 100% in ${duration(left)}${resets} · ${fit}`,
+      status: 'good',
+    };
+  }
+  return {
+    value: left < 60_000 ? 'Due now' : `in ${duration(left)}`,
+    sub: `Estimate · ${windowLabel} · ${fit}`,
+    status: projectionStatus(left, resetIn),
+  };
+}
+
+/** The switch request a Target selection means. */
+function requestFor(choice: string): SwitchRequest {
+  const slotMatch = /^slot:(\d+)$/.exec(choice);
+  return slotMatch && slotMatch[1] !== undefined
+    ? { target: Number(slotMatch[1]), reason: 'manual' }
+    : { strategy: choice as SwitchStrategy, reason: 'manual' };
 }
 
 const KIND_LABEL: Record<Account['kind'], string> = {
@@ -207,6 +325,11 @@ export function Dashboard() {
   const models = state?.settings.autoswitch.models ?? [];
   // Re-reads history whenever a poll lands, without re-running on every render.
   const pollStamp = accounts.map((a) => `${a.slot}:${a.usage?.fetchedAt ?? 0}`).join(',');
+  // Everything the rotation rules read, so the resolved target is re-asked when
+  // one of them moves and at no other time.
+  const rotationStamp = accounts
+    .map((a) => `${a.slot}:${a.active ? 1 : 0}${a.disabled ? 'd' : ''}${a.quarantinedAt ? 'q' : ''}:${a.usageStatus}`)
+    .join(',');
 
   const [history, setHistory] = useState<HistoryPoint[] | null>(null);
   const [historyError, setHistoryError] = useState<string | null>(null);
@@ -214,6 +337,8 @@ export function Dashboard() {
   const [now, setNow] = useState(() => Date.now());
 
   const [choice, setChoice] = useState('best');
+  const [resolved, setResolved] = useState<SwitchResult | null>(null);
+  const [resolveFailed, setResolveFailed] = useState(false);
   const [preview, setPreview] = useState<SwitchResult | null>(null);
   const [previewing, setPreviewing] = useState(false);
   const [committing, setCommitting] = useState(false);
@@ -264,16 +389,37 @@ export function Dashboard() {
     };
   }, [api, active?.slot, pollStamp]);
 
+  // The card has to name the account this rule lands on, so the rule is run on
+  // render. `previewSwitch` is a dry run: it computes, it never writes.
+  useEffect(() => {
+    if (accounts.length < 2) {
+      setResolved(null);
+      setResolveFailed(false);
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      try {
+        const result = await api.previewSwitch(requestFor(choice));
+        if (cancelled) return;
+        setResolved(result);
+        setResolveFailed(false);
+      } catch {
+        if (cancelled) return;
+        setResolved(null);
+        setResolveFailed(true);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [api, choice, accounts.length, pollStamp, rotationStamp]);
+
   const openPreview = useCallback(async () => {
     setPreviewing(true);
     setSwitchError(null);
     try {
-      const slotMatch = /^slot:(\d+)$/.exec(choice);
-      const request =
-        slotMatch && slotMatch[1] !== undefined
-          ? { target: Number(slotMatch[1]), reason: 'manual' as const }
-          : { strategy: choice as SwitchStrategy, reason: 'manual' as const };
-      setPreview(await api.previewSwitch(request));
+      setPreview(await api.previewSwitch(requestFor(choice)));
     } catch (cause: unknown) {
       setSwitchError(messageOf(cause));
     } finally {
@@ -339,6 +485,9 @@ export function Dashboard() {
   const windows = meterWindows(active);
   const bindingLabel =
     windows.find((w) => w.key === room?.bindingWindow)?.label ?? room?.bindingWindow ?? 'unknown window';
+  // One direction for the whole view: percent *used*, the same way every bar
+  // below, the API and Automation state it. The remainder goes in the subtitle.
+  const usedPct = room === null ? null : 100 - room.remaining;
   // A window can read higher than the binding one and still not gate, because
   // the auto-switch model list decides what counts. Say so rather than look wrong.
   const ungated = windows.filter(
@@ -351,12 +500,16 @@ export function Dashboard() {
   );
   const disabled = accounts.filter((a) => a.disabled);
 
-  const forecast =
-    forecasts?.find((f) => f.windowKey === room?.bindingWindow) ??
-    forecasts?.find((f) => f.exhaustionAt !== null) ??
-    null;
-  const parsedExhaustion = forecast?.exhaustionAt ? Date.parse(forecast.exhaustionAt) : Number.NaN;
-  const exhaustionMs = Number.isFinite(parsedExhaustion) ? parsedExhaustion : null;
+  const bindingForecast = forecasts?.find((f) => f.windowKey === room?.bindingWindow) ?? null;
+  const forecast = bindingForecast ?? forecasts?.find((f) => f.exhaustionAt !== null) ?? null;
+  const exhaustionMs = instant(forecast?.exhaustionAt ?? undefined);
+  const forecastWindow = forecast ? windows.find((w) => w.key === forecast.windowKey) : undefined;
+  const forecastLabel = forecastWindow?.label ?? forecast?.windowKey ?? 'this window';
+  const forecastResetAt = instant(forecastWindow?.resetsAt);
+  const forecastResetIn = forecastResetAt === null ? null : forecastResetAt - now;
+  const projection = projectionTile(forecasts, forecast, exhaustionMs, forecastLabel, forecastResetIn, now);
+  const paceNote =
+    bindingForecast?.expectedPct === undefined ? null : bindingForecast.aheadOfPace ? 'ahead of pace' : 'on pace';
 
   const sparkPoints =
     active && history && room
@@ -374,6 +527,14 @@ export function Dashboard() {
 
   const series = history ? buildSeries(accounts, history, '5h') : [];
   const tableRows = seriesTable(series);
+
+  const canRotate = accounts.length >= 2;
+  const resolvedTo = resolved?.to;
+  const resolvedAccount = resolvedTo ? accounts.find((a) => a.slot === resolvedTo.slot) : undefined;
+  const resolvedRoom = headroom(resolvedAccount?.usage ?? resolvedAccount?.lastGoodUsage, models);
+  // A rule that resolves onto nothing would open a modal reading "No target
+  // resolved", so the button that opens it is not offered.
+  const noTarget = resolved !== null && resolvedTo === undefined;
 
   const previewTarget = preview?.to;
   const alreadyActive = previewTarget !== undefined && previewTarget.slot === state.activeSlot;
@@ -417,48 +578,29 @@ export function Dashboard() {
           sub={
             active
               ? `Slot ${active.slot} · ${KIND_LABEL[active.kind]} · ${USAGE_STATUS_META[active.usageStatus].label}`
-              : 'Add an account, or switch to one, to start tracking quota.'
+              : 'Open Accounts to sign one in.'
           }
           status={active ? STATUS_FOR_USAGE[active.usageStatus] : 'neutral'}
+          onClick={goToAccounts}
         />
 
         <StatTile
-          label="Headroom in the binding window"
-          value={room ? pctText(room.remaining) : 'Unknown'}
-          sub={room ? `${bindingLabel} is binding` : 'No usage has been read for this account yet.'}
-          status={room ? statusForPct(100 - room.remaining) : 'neutral'}
+          label="Binding window used"
+          value={usedPct === null ? 'Unknown' : pctText(usedPct)}
+          sub={
+            room === null
+              ? 'No usage has been read for this account yet.'
+              : `${pctText(room.remaining)} left in the ${bindingLabel} window${paceNote === null ? '' : ` · ${paceNote}`}`
+          }
+          status={usedPct === null ? 'neutral' : paceStatus(usedPct, bindingForecast)}
           spark={sparkPoints.length > 1 ? sparkPoints : undefined}
         />
 
         <StatTile
           label="Projected exhaustion"
-          value={
-            forecasts === null
-              ? 'Loading'
-              : exhaustionMs === null
-                ? 'Not on this pace'
-                : exhaustionMs <= now
-                  ? 'Due now'
-                  : `in ${duration(exhaustionMs - now)}`
-          }
-          sub={
-            forecasts === null
-              ? 'Fitting the recent burn rate.'
-              : forecast === null
-                ? 'Not enough history yet — two polls inside one window are needed.'
-                : `Estimate · ${forecast.windowKey} · ${describeFit(forecast.burn.confidence)}`
-          }
-          status={
-            exhaustionMs === null
-              ? forecasts === null
-                ? 'neutral'
-                : 'good'
-              : exhaustionMs - now < HOUR
-                ? 'critical'
-                : exhaustionMs - now < 4 * HOUR
-                  ? 'serious'
-                  : 'warning'
-          }
+          value={projection.value}
+          sub={projection.sub}
+          status={projection.status}
         />
 
         <StatTile
@@ -466,12 +608,14 @@ export function Dashboard() {
           value={accounts.length === 0 ? 'None' : `${accounts.length - attention.length}/${accounts.length}`}
           sub={
             accounts.length === 0
-              ? 'No accounts are managed yet. Add one on the Accounts screen.'
+              ? 'No accounts are managed yet.'
               : attention.length === 0
                 ? disabled.length === 0
                   ? 'Every managed account is reporting.'
                   : `${disabled.length} held out of rotation.`
-                : `${attention.length} need attention: ${attention.map((a) => `slot ${a.slot}`).join(', ')}`
+                : `${attention.length} ${attention.length === 1 ? 'needs' : 'need'} attention: ${attention
+                    .map((a) => `slot ${a.slot}`)
+                    .join(', ')}`
           }
           status={
             accounts.length === 0
@@ -482,6 +626,7 @@ export function Dashboard() {
                   ? 'critical'
                   : 'warning'
           }
+          onClick={goToAccounts}
         />
       </div>
 
@@ -531,59 +676,86 @@ export function Dashboard() {
               Switch account
             </h2>
           </div>
-          <p className="cd-secondary">
-            The preview lists every file ClaudeDeck would write. Nothing is written until you confirm it.
-          </p>
+          {!canRotate ? (
+            <>
+              <p className="cd-secondary">
+                {accounts.length === 0
+                  ? 'No accounts are managed yet, so there is nowhere to switch to.'
+                  : `Slot ${accounts[0]?.slot ?? 1} is the only managed account, so there is nowhere to switch to.`}
+              </p>
+              <Button variant="primary" icon="users" onClick={goToAccounts}>
+                Add an account
+              </Button>
+            </>
+          ) : (
+            <>
+              <div className="cd-switch-strategies">
+                <label className="cd-field">
+                  <span>Target</span>
+                  <select
+                    className="cd-select"
+                    value={choice}
+                    onChange={(event) => setChoice(event.target.value)}
+                  >
+                    <option value="best">Rule: most headroom</option>
+                    <option value="next">Rule: next slot in order</option>
+                    <option value="next-available">Rule: next slot with quota left</option>
+                    <option value="consume-first">Rule: finish the current account first</option>
+                    {accounts
+                      .filter((a) => !a.active)
+                      .map((a) => (
+                        <option key={a.slot} value={`slot:${a.slot}`}>
+                          Slot {a.slot} — {a.email}
+                        </option>
+                      ))}
+                  </select>
+                </label>
 
-          <div className="cd-switch-strategies">
-            <label className="cd-field">
-              <span>Target</span>
-              <select
-                className="cd-select"
-                value={choice}
-                onChange={(event) => setChoice(event.target.value)}
-                disabled={accounts.length === 0}
-              >
-                <option value="best">Rule: most headroom</option>
-                <option value="next">Rule: next slot in order</option>
-                <option value="next-available">Rule: next slot with quota left</option>
-                <option value="consume-first">Rule: finish the current account first</option>
-                {accounts
-                  .filter((a) => !a.active)
-                  .map((a) => (
-                    <option key={a.slot} value={`slot:${a.slot}`}>
-                      Slot {a.slot} — {a.email}
-                    </option>
-                  ))}
-              </select>
-            </label>
+                {/* What the rule resolves to, run on render: the account you
+                    would be signed in as is the only question this card is
+                    actually asked. */}
+                <p className="cd-secondary">
+                  {resolveFailed ? (
+                    'The engine could not be asked where this rule lands. Refresh usage and it will come back.'
+                  ) : resolved === null ? (
+                    'Resolving where this rule lands…'
+                  ) : resolvedTo === undefined ? (
+                    `No account is eligible: ${resolved.reason}`
+                  ) : (
+                    <>
+                      Lands on{' '}
+                      <strong>{resolvedAccount ? accountLabel(resolvedAccount) : resolvedTo.email}</strong> · slot{' '}
+                      {resolvedTo.slot} ·{' '}
+                      {resolvedRoom
+                        ? `${pctText(100 - resolvedRoom.remaining)} used`
+                        : 'usage not reported yet'}
+                      {resolvedTo.slot === state.activeSlot ? ' · already signed in' : ''}
+                    </>
+                  )}
+                </p>
 
-            <Button
-              variant="primary"
-              icon="chevron"
-              busy={previewing}
-              disabled={accounts.length === 0}
-              onClick={() => void openPreview()}
-            >
-              Preview switch
-            </Button>
-          </div>
+                <Button
+                  variant="primary"
+                  icon="chevron"
+                  busy={previewing}
+                  disabled={noTarget}
+                  onClick={() => void openPreview()}
+                >
+                  Preview switch
+                </Button>
+              </div>
 
-          {switchError && preview === null ? (
-            <div className="cd-note cd-note--error" role="alert">
-              <Icon name="alert-octagon" />
-              <span className="cd-note-body">
-                <span className="cd-note-title">Preview failed</span>
-                <span>{switchError}</span>
-              </span>
-            </div>
-          ) : null}
-
-          <p className="cd-switch-foot">
-            {accounts.length === 0
-              ? 'There are no accounts to switch between yet.'
-              : 'Step 1 of 2 — preview, then confirm.'}
-          </p>
+              {switchError && preview === null ? (
+                <div className="cd-note cd-note--error" role="alert">
+                  <Icon name="alert-octagon" />
+                  <span className="cd-note-body">
+                    <span className="cd-note-title">Preview failed</span>
+                    <span>{switchError}</span>
+                  </span>
+                </div>
+              ) : null}
+            </>
+          )}
         </section>
       </div>
 
@@ -629,7 +801,7 @@ export function Dashboard() {
         open={preview !== null}
         onClose={() => setPreview(null)}
         title="Confirm account switch"
-        description="This is the plan ClaudeDeck computed. Review the writes before approving them."
+        description="Nothing has been written yet. These are the exact files approving this would write."
         dismissOnOverlay={false}
         footer={
           <>

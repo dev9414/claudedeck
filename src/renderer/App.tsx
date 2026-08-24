@@ -19,6 +19,7 @@ import { EmptyState } from './components/EmptyState';
 import { Sidebar, NAV_ITEMS, isViewId, type ViewId } from './components/Sidebar';
 import { TitleBar } from './components/TitleBar';
 import { CommandPalette, useCommandPaletteHotkey, type Command } from './components/CommandPalette';
+import { ToastProvider, useToast } from './components/Toast';
 
 const VIEWS: Record<ViewId, ComponentType> = {
   dashboard: lazy(() => import('./views/Dashboard')),
@@ -115,8 +116,9 @@ function ViewLoading() {
 // Shell
 // ---------------------------------------------------------------------------
 
-export function App() {
+function AppShell() {
   const { state, loading, error, api, stubbed, reload } = useDeckState();
+  const toast = useToast();
 
   const persistTheme = useCallback(
     (mode: ThemeMode) => {
@@ -175,13 +177,27 @@ export function App() {
     }
   }, [api, say]);
 
+  /**
+   * Both outcomes are stated on screen, not just to the accessibility tree: a
+   * switch that lands changes which account your next message spends, and that
+   * is not something to leave the user guessing at. The toast host is itself a
+   * polite live region, so announcing here as well would say it twice.
+   */
   const switchTo = useCallback(
     async (target: number | undefined, strategy: SwitchStrategy | undefined, label: string) => {
       const result = await api.switchAccount({ target, strategy, reason: 'manual' });
-      if (result.switched && result.to) say(`Switched to ${result.to.email}.`);
-      else say(`${label} did not switch: ${result.error ?? result.reason}`);
+      if (result.switched && result.to) {
+        toast.success(
+          `Now signed in as ${result.to.email} — slot ${result.to.slot}`,
+          state?.platform === 'macos'
+            ? 'macOS caches the credential for about 30 seconds; restart Claude Code if you need it sooner.'
+            : 'Claude Code picks it up on your next message.',
+        );
+      } else {
+        toast.failure(`${label} did not switch`, result.error ?? result.reason);
+      }
     },
-    [api, say],
+    [api, state?.platform, toast],
   );
 
   const toggleAutoSwitch = useCallback(async () => {
@@ -413,6 +429,18 @@ export function App() {
         {announcement}
       </div>
     </div>
+  );
+}
+
+/**
+ * The shell is mounted *inside* the toast host rather than owning it, so any
+ * view can confirm its own action without routing the message back up here.
+ */
+export function App() {
+  return (
+    <ToastProvider>
+      <AppShell />
+    </ToastProvider>
   );
 }
 

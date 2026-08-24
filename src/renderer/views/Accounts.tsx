@@ -17,6 +17,7 @@ import { Button, IconButton } from '../components/Button';
 import { EmptyState } from '../components/EmptyState';
 import { Icon } from '../components/Icon';
 import { Modal } from '../components/Modal';
+import { useToast } from '../components/Toast';
 import { UsageMeter } from '../charts/UsageMeter';
 import './views.css';
 
@@ -79,6 +80,8 @@ export function Accounts() {
     [state],
   );
 
+  const toast = useToast();
+
   const [now, setNow] = useState(() => Date.now());
   const [actionError, setActionError] = useState<string | null>(null);
   const [announcement, setAnnouncement] = useState('');
@@ -115,16 +118,21 @@ export function Accounts() {
   const [tokenEmail, setTokenEmail] = useState('');
 
   /** Capture whoever Claude Code is signed in as. Shared by the header and the
-   *  empty state, so both report success and failure the same way. */
+   *  empty state, so both report success and failure the same way.
+   *
+   *  The confirmation is a toast rather than an announcement: this used to land
+   *  only in the 1px live region, so pressing the biggest button on the page
+   *  changed nothing a sighted user could see. The toast host announces too, so
+   *  saying it here as well would say it twice. */
   const captureSignedIn = useCallback(
     () =>
       run('add', async () => {
         const result = await api.addCurrentAccount();
         if (!result.ok) return result.error;
-        setAnnouncement(`Captured ${result.value.email} into slot ${result.value.slot}.`);
+        toast.success(`Captured ${result.value.email} into slot ${result.value.slot}`);
         return null;
       }),
-    [api, run],
+    [api, run, toast],
   );
 
   const submitToken = useCallback(
@@ -160,10 +168,18 @@ export function Accounts() {
         const result = await api.switchAccount({ target: account.slot, reason: 'manual' });
         if (!result.switched) return result.error ?? result.reason;
         setConfirmation(null);
-        setAnnouncement(`Switched to ${account.email}.`);
+        // Names the consequence, not the act: what changed is which account
+        // your next message spends. macOS caches the credential, so there the
+        // honest answer is "in about half a minute".
+        toast.success(
+          `Now signed in as ${account.email} — slot ${account.slot}`,
+          state?.platform === 'macos'
+            ? 'macOS caches the credential for about 30 seconds; restart Claude Code if you need it sooner.'
+            : 'Claude Code picks it up on your next message.',
+        );
         return null;
       }),
-    [api, run],
+    [api, run, state?.platform, toast],
   );
 
   const commitRemove = useCallback(
@@ -317,14 +333,19 @@ export function Accounts() {
         </Button>
       </header>
 
-      <div className="cd-note cd-note--info">
-        <Icon name="info" />
+      {/* Unrecoverable data loss, so it reads exactly as it does in the wizard
+          (Onboarding's capture step): critical tone, consequence first. It used
+          to be the last clause of a sentence in neutral chrome. */}
+      <div className="cd-note cd-note--error">
+        <Icon name="alert-octagon" title="Important" />
         <span className="cd-note-body">
-          <span className="cd-note-title">Adding another account</span>
+          <span className="cd-note-title">
+            Do not run <code>/logout</code> first — a revoked refresh token cannot be recovered
+          </span>
           <span>
-            Log in to Claude Code as the next account, then press <strong>Add account</strong> — ClaudeDeck captures
-            whoever is signed in. Do <strong>not</strong> run <code>/logout</code> first: Claude Code may revoke the
-            refresh token for the account you are leaving.
+            Signing out can revoke the refresh token for the account you are leaving, and that account would have to
+            sign in from scratch. Log in to Claude Code as the next account instead, then press{' '}
+            <strong>Add account</strong>.
           </span>
         </span>
       </div>

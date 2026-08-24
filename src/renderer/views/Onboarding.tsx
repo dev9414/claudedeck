@@ -66,6 +66,9 @@ const VIEW_CSS = `
 .cdo-opt:hover { border-color: var(--border-strong); }
 .cdo-opt[data-selected="true"] { border-color: var(--accent); background: var(--accent-wash); }
 .cdo-opt input { margin: 3px 0 0; accent-color: var(--accent); }
+.cdo-opt[data-disabled="true"] { cursor: not-allowed; background: var(--surface-2); }
+.cdo-opt[data-disabled="true"]:hover { border-color: var(--border); }
+.cdo-opt[data-disabled="true"] .cdo-opt-title { color: var(--text-secondary); }
 .cdo-opt-title { display: block; font-size: 13px; font-weight: 600; }
 .cdo-opt-desc { display: block; margin-top: 2px; font-size: 12px; line-height: 1.45; color: var(--text-secondary); }
 
@@ -254,8 +257,10 @@ function Wizard({
               <h1 className="cd-h1">You are set up</h1>
             </div>
             <p className="cd-secondary">
-              ClaudeDeck is managing {accounts.length} account{accounts.length === 1 ? '' : 's'}. The dashboard shows
-              live quota; Automation holds every rotation rule.
+              ClaudeDeck is managing {accounts.length} account{accounts.length === 1 ? '' : 's'}.{' '}
+              {accounts.length < 2
+                ? 'Switching needs a second one: add it from the Accounts view whenever you are ready, then turn auto-switch on in Automation.'
+                : 'The dashboard shows live quota; Automation holds every rotation rule.'}
             </p>
             <Note tone="info" icon="info">
               Still seeing this wizard instead of the dashboard? The main process has not marked setup complete yet.
@@ -337,6 +342,7 @@ function Wizard({
             state={state}
             api={api}
             onBack={() => goTo(2)}
+            onAddAccount={() => goTo(1)}
             onDone={() => {
               writeStoredStep(null);
               setDone(true);
@@ -505,6 +511,7 @@ function AddAccountStep({
   const [busy, setBusy] = useState<string | null>(null);
   const [captureError, setCaptureError] = useState<string | null>(null);
   const [captured, setCaptured] = useState<Account | null>(null);
+  const [reused, setReused] = useState<{ email: string; slot: number } | null>(null);
 
   const [token, setToken] = useState('');
   const [tokenEmail, setTokenEmail] = useState('');
@@ -516,11 +523,19 @@ function AddAccountStep({
   const capture = async () => {
     setBusy('capture');
     setCaptureError(null);
+    setReused(null);
     try {
       const trimmed = alias.trim();
+      // Capture upserts by email, so pressing this again while Claude Code is
+      // still signed in as the same person rewrites the slot it already holds.
+      // Remember who was here, so that case can be named rather than reported
+      // as a new account.
+      const held = new Map(accounts.map((a) => [a.email.trim().toLowerCase(), a.slot]));
       const result = await api.addCurrentAccount({ alias: trimmed === '' ? undefined : trimmed });
       if (result.ok) {
-        setCaptured(result.value);
+        const already = held.get(result.value.email.trim().toLowerCase());
+        setCaptured(already === undefined ? result.value : null);
+        setReused(already === undefined ? null : { email: result.value.email, slot: already });
         setAlias('');
       } else {
         setCaptured(null);
@@ -588,9 +603,17 @@ function AddAccountStep({
           </span>
         </label>
 
+        {accounts.length > 0 ? (
+          <Note tone="info" icon="info">
+            Capture takes whoever Claude Code is signed in as right now. For a second account, run{' '}
+            <span className="cd-mono">claude</span> in a terminal and log in as that account first — without{' '}
+            <span className="cd-mono">/logout</span> — then press the button below.
+          </Note>
+        ) : null}
+
         <div className="cd-row">
           <Button variant="primary" icon="plus" busy={busy === 'capture'} onClick={() => void capture()}>
-            Capture the current account
+            {accounts.length === 0 ? 'Capture the current account' : 'Capture another account'}
           </Button>
         </div>
 
@@ -598,6 +621,14 @@ function AddAccountStep({
           <Note tone="good" icon="check">
             Captured <strong>{captured.email}</strong> into slot {captured.slot}
             {captured.alias ? ` as “${captured.alias}”` : ''}.
+          </Note>
+        ) : null}
+
+        {reused ? (
+          <Note tone="warning" icon="alert-triangle">
+            <strong>That is already slot {reused.slot}.</strong> Claude Code is still signed in as {reused.email}, so
+            slot {reused.slot} was refreshed and no account was added. Log in to Claude Code as your other account
+            first, then press this again.
           </Note>
         ) : null}
 
@@ -690,7 +721,9 @@ function AddAccountStep({
           </div>
           <table className="cd-table">
             <caption>
-              {accounts.length} account{accounts.length === 1 ? '' : 's'} ClaudeDeck can switch between
+              {accounts.length === 1
+                ? '1 account. Switching needs two — capture the second whenever you like.'
+                : `${accounts.length} accounts ClaudeDeck can switch between`}
             </caption>
             <thead>
               <tr>
@@ -736,7 +769,7 @@ function AddAccountStep({
           <span className="cd-muted">Capture an account, or add a token, to continue.</span>
         ) : null}
         <Button variant="primary" trailingIcon="chevron" disabled={accounts.length === 0} onClick={onNext}>
-          Next
+          {accounts.length === 1 ? 'Continue with 1 account' : 'Next'}
         </Button>
       </div>
     </>
@@ -856,38 +889,58 @@ function BehaviorStep({
   state,
   api,
   onBack,
+  onAddAccount,
   onDone,
 }: {
   state: DeckState;
   api: DeckApi;
   onBack: () => void;
+  onAddAccount: () => void;
   onDone: () => void;
 }) {
   const cfg = state.settings.autoswitch;
-  const [auto, setAuto] = useState(cfg.enabled);
+  const [wantsAuto, setWantsAuto] = useState(cfg.enabled);
   const [threshold, setThreshold] = useState(cfg.threshold);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const managed = state.accounts.length;
   const rotatable = state.accounts.filter((a) => !a.disabled && a.kind !== 'api-key').length;
+  // The engine refuses to start with nowhere to go, so automatic is not on
+  // offer: an option that cannot be activated must not be selectable.
+  const autoBlocked = rotatable < 2;
+  const auto = wantsAuto && !autoBlocked;
+  const heldText = managed === 0 ? 'none' : managed === 1 ? 'one' : String(managed);
 
   const finish = async () => {
     setBusy(true);
     setError(null);
     try {
-      const saved = await api.updateSettings({ autoswitch: { ...cfg, enabled: auto, threshold } });
-      if (!saved.ok) {
-        setError(`Your choice was not saved: ${saved.error}. If safe mode is on, turn it off in Settings and try again.`);
-        return;
-      }
       if (auto) {
+        // Start first. `enabled: true` must never reach disk unless rotation is
+        // really armed, or the app spends the session believing it is and
+        // pointing the user at a button that fails again.
         const started = await api.startAutoSwitch();
         if (!started.ok) {
-          setError(
-            `The setting was saved but the engine did not start: ${started.error}. You can start it by hand from the Automation view.`,
-          );
+          await api.updateSettings({ autoswitch: { ...cfg, enabled: false, threshold } });
+          if (started.code === 'too-few-accounts') {
+            // Nothing to rotate between yet. Manual is the truthful state, and
+            // setup ends either way rather than trapping anyone on this step.
+            onDone();
+            return;
+          }
+          setError(`Auto-switch did not start, so it was left off: ${started.error}`);
           return;
         }
+      }
+      const saved = await api.updateSettings({ autoswitch: { ...cfg, enabled: auto, threshold } });
+      if (!saved.ok) {
+        setError(
+          auto
+            ? `Auto-switch is running, but the choice was not saved: ${saved.error}. It will not come back after a restart. If safe mode is on, turn it off in Settings.`
+            : `Your choice was not saved: ${saved.error}. If safe mode is on, turn it off in Settings and try again.`,
+        );
+        return;
       }
       onDone();
     } finally {
@@ -901,7 +954,7 @@ function BehaviorStep({
         <fieldset className="cdo-opts">
           <legend className="cd-sr-only">Switching behavior</legend>
           <label className="cdo-opt" data-selected={auto ? 'false' : 'true'}>
-            <input type="radio" name="cdo-mode" checked={!auto} onChange={() => setAuto(false)} />
+            <input type="radio" name="cdo-mode" checked={!auto} onChange={() => setWantsAuto(false)} />
             <span>
               <span className="cdo-opt-title">Switch manually</span>
               <span className="cdo-opt-desc">
@@ -910,13 +963,26 @@ function BehaviorStep({
               </span>
             </span>
           </label>
-          <label className="cdo-opt" data-selected={auto ? 'true' : 'false'}>
-            <input type="radio" name="cdo-mode" checked={auto} onChange={() => setAuto(true)} />
+          <label
+            className="cdo-opt"
+            data-selected={auto ? 'true' : 'false'}
+            data-disabled={autoBlocked ? 'true' : 'false'}
+          >
+            <input
+              type="radio"
+              name="cdo-mode"
+              checked={auto}
+              disabled={autoBlocked}
+              onChange={() => setWantsAuto(true)}
+            />
             <span>
               <span className="cdo-opt-title">Switch automatically</span>
               <span className="cdo-opt-desc">
-                ClaudeDeck polls in the background and moves Claude Code to another account before the active one hits
-                its limit.
+                {!autoBlocked
+                  ? 'ClaudeDeck polls in the background and moves Claude Code to another account before the active one hits its limit.'
+                  : rotatable === managed
+                    ? `Needs two accounts to move between. ClaudeDeck is managing ${heldText}.`
+                    : `Needs two accounts it can rotate between. API-key and disabled accounts are skipped, which leaves ${rotatable} of your ${managed}.`}
               </span>
             </span>
           </label>
@@ -945,15 +1011,20 @@ function BehaviorStep({
               {100 - threshold} points of headroom for whatever request is already in flight. Strategy, cooldown, and
               per-model windows are all tunable later in Automation.
             </p>
-
-            {rotatable < 2 ? (
-              <Note tone="warning" icon="alert-triangle">
-                Auto-switch needs somewhere to go, and only {rotatable} account
-                {rotatable === 1 ? ' is' : 's are'} eligible to rotate. Add a second subscription account from the
-                Accounts view, or leave this on manual for now.
-              </Note>
-            ) : null}
           </>
+        ) : autoBlocked ? (
+          <Note tone="warning" icon="alert-triangle">
+            <span>
+              ClaudeDeck switches between two logins; you have {heldText}. It still tracks quota and warns you before a
+              limit lands, but there is nowhere to switch to.
+            </span>
+            <div className="cd-row">
+              <Button icon="plus" onClick={onAddAccount}>
+                Capture another account
+              </Button>
+              <span className="cd-muted">Or add it later from the Accounts view.</span>
+            </div>
+          </Note>
         ) : (
           <Note tone="info" icon="info">
             You can turn auto-switch on at any time from the Automation view — every rule stays visible and reversible
@@ -973,6 +1044,11 @@ function BehaviorStep({
           Back
         </Button>
         <span className="cd-spacer" />
+        {error ? (
+          <Button variant="ghost" onClick={onDone}>
+            Open ClaudeDeck anyway
+          </Button>
+        ) : null}
         <Button variant="primary" icon="check" busy={busy} onClick={() => void finish()}>
           Finish setup
         </Button>

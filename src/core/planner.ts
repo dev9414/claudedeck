@@ -10,10 +10,17 @@
  *
  * So this module simulates the working day minute by minute against the learned
  * demand curve from `profile.ts`, and reports the anchor that costs the fewest
- * blocked minutes, weighting the user's peak hours heavier. It is pure: `now`
- * never appears, the day being planned arrives as `dayStartMs`, and nothing is
- * random -- the same input always yields the same plan, so the UI can show it
- * without it shifting under the user.
+ * blocked minutes, weighting the user's peak hours heavier. Nothing is random
+ * and the day being planned arrives as `dayStartMs`, so the same inputs always
+ * yield the same plan.
+ *
+ * The current instant is the one input that is not the schedule, and it earns
+ * its place: an anchor is a message the user has to actually send, so a
+ * candidate already in the past is not a recommendation at all. `nowMs` decides
+ * which anchors are still available, and once every anchor worth taking today
+ * has gone it decides that the day being planned is tomorrow. Pass it and the
+ * module stays pure; omit it and it falls back to the wall clock, because
+ * silently naming a time that has been and gone is the worse failure.
  */
 
 import { FIVE_HOUR_MS } from '@shared/types';
@@ -106,6 +113,13 @@ export interface PlanInput {
   accounts: PlanAccount[];
   /** How many times heavier a blocked peak minute counts. */
   peakWeight: number;
+  /**
+   * The current instant, epoch ms. Anchors it has passed are not candidates,
+   * and a day with no candidate left is replanned as the next day -- so what
+   * comes back is always something the user can still do. Defaults to
+   * `Date.now()`; pass it to keep the plan deterministic.
+   */
+  nowMs?: number;
   /**
    * `PlannerConfig.configured`: whether `schedule` is hours the user actually
    * confirmed. Absent or false means the app invented them, which the plan has
@@ -414,8 +428,17 @@ export function fleetCost(outcomes: PlanOutcome[], peakWeight: number): number {
  * that are strictly worse -- they withhold an account through the very hours the
  * plan is protecting. Around 150-250 candidates, so the search is exhaustive
  * rather than clever.
+ *
+ * `nowMs` is a floor, not a filter: a candidate is an instruction to send a
+ * message, and one in the past cannot be followed. It applies only while `now`
+ * sits inside the stretch being searched -- a day already over is history, which
+ * the CLI may legitimately ask about, and a day still ahead is unaffected.
+ *
+ * An empty result is therefore meaningful rather than a failure: it says `now`
+ * is past every anchor worth taking on this day, and the caller should plan the
+ * next one instead of naming a time that has been and gone.
  */
-export function candidateAnchors(input: SimInput): number[] {
+export function candidateAnchors(input: SimInput, nowMs?: number): number[] {
   const dayStartMs = finite(input.dayStartMs) ?? 0;
   const work = spanInterval(input.schedule.work, dayStartMs);
   const peak = resolvePeak(work, input.schedule.peak, dayStartMs);
@@ -423,14 +446,38 @@ export function candidateAnchors(input: SimInput): number[] {
   const earliest = Math.max(dayStartMs, work.startMs - ANCHOR_LOOKBACK_MIN * MINUTE_MS);
   const latest = Math.max(earliest, peak.outside ? work.endMs : peak.interval.endMs);
 
+  const now = finite(nowMs);
+  // A night shift's search runs past midnight, so the day being planned is over
+  // only once `now` is past both its last candidate and its own 24 hours.
+  const stillPlanning = now !== null && now >= earliest && now < Math.max(latest, dayStartMs + DAY_MS);
+  // Ceiling onto the same grid, so clamping shifts the candidate set without
+  // giving it a second, off-grid origin.
+  const from = stillPlanning ? earliest + Math.ceil((now - earliest) / STEP_MS) * STEP_MS : earliest;
+  if (from > latest) return [];
+
   const seen = new Set<number>();
-  for (let t = earliest; t <= latest; t += STEP_MS) seen.add(t);
+  for (let t = from; t <= latest; t += STEP_MS) seen.add(t);
   // The start of work is the baseline anchor, so it is always a candidate even
-  // when the grid steps past it on a working day that starts off-grid.
-  if (work.startMs >= earliest && work.startMs <= latest) seen.add(work.startMs);
-  if (seen.size === 0) seen.add(work.startMs);
+  // when the grid steps past it on a working day that starts off-grid -- unless
+  // it has passed, in which case it is not an anchor anyone can take.
+  if (work.startMs >= from && work.startMs <= latest) seen.add(work.startMs);
 
   return [...seen].sort((a, b) => a - b);
+}
+
+/**
+ * Minutes of peak the plan was actually scored against: the declared peak
+ * clamped into working hours, which is exactly what `blockedPeakMin` is counted
+ * out of. Exported so a caller can turn blocked peak minutes into *protected*
+ * peak minutes without re-deriving the clamp and landing on a different number
+ * from the one the simulation used.
+ */
+export function scoredPeakMinutes(schedule: WorkSchedule, dayStartMs: number): number {
+  const start = finite(dayStartMs) ?? 0;
+  const work = spanInterval(schedule.work, start);
+  const peak = resolvePeak(work, schedule.peak, start);
+  if (peak.outside) return 0;
+  return round((peak.interval.endMs - peak.interval.startMs) / MINUTE_MS, 2);
 }
 
 /**
@@ -438,6 +485,11 @@ export function candidateAnchors(input: SimInput): number[] {
  * then repeatedly re-optimise one account exhaustively with the others held
  * fixed, until a pass stops improving or the cap is hit. With one account a
  * single pass already *is* the exhaustive search.
+ *
+ * `startAnchor` is where the descent begins, and it must be an anchor the plan
+ * is allowed to recommend: an account that finds nothing better than its
+ * starting point keeps it, so starting at a time that has passed can leak a
+ * past anchor into a plan that otherwise beat the baseline.
  *
  * Deterministic by construction -- candidates ascend, ties resolve one way, and
  * `Math.random` appears nowhere.
@@ -447,9 +499,10 @@ function optimizeAnchors(
   candidates: number[],
   accountCount: number,
   maxPasses: number,
+  startAnchor?: number,
 ): { anchors: number[]; cost: number } {
   const dayStartMs = finite(input.dayStartMs) ?? 0;
-  const workStart = spanInterval(input.schedule.work, dayStartMs).startMs;
+  const workStart = finite(startAnchor) ?? spanInterval(input.schedule.work, dayStartMs).startMs;
   const weight = sanePeakWeight(input.peakWeight);
 
   const anchors = new Array<number>(accountCount).fill(workStart);
@@ -533,9 +586,14 @@ function blockedInWindows(windows: WindowSpan[]): number {
  * as much. That matters more than it sounds: with a flat or empty profile
  * nothing is ever blocked, every anchor ties, and a planner that resolved that
  * tie into advice would be telling the user to delay their morning for nothing.
+ *
+ * `input.nowMs` decides which day is planned and which anchors are offered: one
+ * already behind the clock is not advice, so when none is left the next day is
+ * planned instead. `SessionPlan.day` is therefore the day that came back, not
+ * always the day asked for, and the first line of the rationale says which.
  */
 export function planDay(input: PlanInput): SessionPlan {
-  const dayStartMs = finite(input.dayStartMs) ?? 0;
+  const requestedDayStartMs = finite(input.dayStartMs) ?? 0;
   const tzOffsetMin = finite(input.tzOffsetMin) ?? 0;
   const weight = sanePeakWeight(input.peakWeight);
   const schedule = input.schedule;
@@ -545,14 +603,27 @@ export function planDay(input: PlanInput): SessionPlan {
   const accounts = Array.isArray(input.accounts) ? input.accounts : [];
   const scheduleDays = Array.isArray(schedule.days) ? schedule.days : [];
   const maxPasses = finite(input.maxPasses) ?? DEFAULT_MAX_PASSES;
+  const nowMs = finite(input.nowMs) ?? Date.now();
 
-  const sim: SimInput = {
-    dayStartMs,
+  const profiles = accounts.map((a) => a.profile ?? emptyProfile());
+  const simFor = (start: number): SimInput => ({
+    dayStartMs: start,
     schedule,
-    profiles: accounts.map((a) => a.profile ?? emptyProfile()),
+    profiles,
     peakWeight: weight,
     tzOffsetMin,
-  };
+  });
+
+  // Which day there is still a first message to place. An empty candidate set
+  // is not a failure: it means every anchor worth taking on the requested day
+  // is behind us, and the honest plan is the next day's -- scored against the
+  // same hours, which the rationale says out loud.
+  const requestedSim = simFor(requestedDayStartMs);
+  const requestedCandidates = candidateAnchors(requestedSim, nowMs);
+  const rolledToNextDay = requestedCandidates.length === 0;
+  const dayStartMs = rolledToNextDay ? requestedDayStartMs + DAY_MS : requestedDayStartMs;
+  const sim = rolledToNextDay ? simFor(dayStartMs) : requestedSim;
+  const candidates = rolledToNextDay ? candidateAnchors(sim, nowMs) : requestedCandidates;
 
   const work = spanInterval(schedule.work, dayStartMs);
   const peak = resolvePeak(work, schedule.peak, dayStartMs);
@@ -561,6 +632,24 @@ export function planDay(input: PlanInput): SessionPlan {
   const weekday = localWeekday(dayStartMs, tzOffsetMin);
   /** The plan's clock is fixed, so every time in the prose reads the same way. */
   const at = (ms: number): string => hhmm(ms, tzOffsetMin);
+  /**
+   * Said first when it applies, because it changes what every other line means.
+   * A plan for tomorrow presented as today's is the failure this whole
+   * mechanism exists to prevent.
+   */
+  const rolledNote = rolledToNextDay
+    ? `Every start time worth taking on ${localDayKey(requestedDayStartMs, tzOffsetMin)} has already passed, so this is ${day}'s plan instead, scored against the same hours.`
+    : null;
+
+  /** The earliest anchor still available; the start of work, until it passes. */
+  const takeableFrom = candidates[0] ?? work.startMs;
+  /**
+   * True when the start of work -- the baseline anchor -- is behind `now`. The
+   * baseline is still simulated, because "compared with starting at 09:00" is
+   * the comparison the whole plan is quoted against, but it must never be
+   * handed back as an instruction.
+   */
+  const startOfWorkPassed = takeableFrom > work.startMs;
 
   // The profile the plan was scored against. Per-account curves are normally
   // the same fleet-wide curve, so the first one is the plan's own model.
@@ -618,6 +707,7 @@ export function planDay(input: PlanInput): SessionPlan {
       cost: round(run.blockedWorkMin + weight * run.blockedPeakMin, 3),
     };
     const rationale = [
+      ...(rolledNote === null ? [] : [rolledNote]),
       'No accounts are set up, so there is no first message to place.',
       `All ${minutesText(run.blockedWorkMin)} of the working day would be blocked; add an account and the planner can anchor it.`,
       ...caveats,
@@ -640,10 +730,26 @@ export function planDay(input: PlanInput): SessionPlan {
   const baseline = baselineOutcomes[0] ?? zeroOutcome(work.startMs);
   const baselineCost = fleetCost(baselineOutcomes, weight);
 
-  const best = optimizeAnchors(sim, candidateAnchors(sim), accounts.length, maxPasses);
+  const best = optimizeAnchors(
+    sim,
+    candidates,
+    accounts.length,
+    maxPasses,
+    // Not the start of work once that has passed: an account the descent cannot
+    // improve on keeps where it started, and that must still be takeable.
+    startOfWorkPassed ? takeableFrom : work.startMs,
+  );
   const beatsBaseline = best.cost < baselineCost - COST_EPS;
-  const anchors = beatsBaseline ? best.anchors : baselineAnchors;
-  const outcomes = beatsBaseline ? simulateFleet(anchors, sim) : baselineOutcomes;
+  // With nothing to beat the baseline the recommendation *is* the baseline --
+  // or, once the start of work has passed, the earliest anchor still open,
+  // because "start at 09:00" is not an instruction a user at 15:44 can follow.
+  const anchors = beatsBaseline
+    ? best.anchors
+    : startOfWorkPassed
+      ? accounts.map(() => takeableFrom)
+      : baselineAnchors;
+  const outcomes =
+    beatsBaseline || startOfWorkPassed ? simulateFleet(anchors, sim) : baselineOutcomes;
 
   const planned = outcomes[0] ?? baseline;
   const peakMinutesSaved = Math.max(0, round(baseline.blockedPeakMin - planned.blockedPeakMin, 2));
@@ -658,7 +764,9 @@ export function planDay(input: PlanInput): SessionPlan {
     const stalled = blockedInWindows(outcome.windows);
     const note = beatsBaseline
       ? `Anchor at ${at(anchorAt)}${resets.length > 0 ? `, resetting ${resets.join(' and ')}` : ''}; ${minutesText(stalled)} blocked inside its windows.`
-      : `Nothing to do differently: start slot ${account.slot} whenever you start, around ${at(anchorAt)}.`;
+      : startOfWorkPassed
+        ? `Nothing to do differently: start slot ${account.slot} whenever you begin -- ${at(anchorAt)} is simply the earliest anchor still open.`
+        : `Nothing to do differently: start slot ${account.slot} whenever you start, around ${at(anchorAt)}.`;
     return { slot: account.slot, email: account.email, alias: account.alias, outcome, note };
   });
 
@@ -677,7 +785,7 @@ export function planDay(input: PlanInput): SessionPlan {
     0,
   );
 
-  const rationale: string[] = [];
+  const rationale: string[] = rolledNote === null ? [] : [rolledNote];
   if (observedHours === 0) {
     rationale.push(
       'There is no recorded usage to simulate against yet, so no start time can be recommended over another. ClaudeDeck records your quota every few minutes while it runs; leave it open for a working day and this becomes a real recommendation.',
@@ -688,11 +796,15 @@ export function planDay(input: PlanInput): SessionPlan {
     );
   } else if (!beatsBaseline && baseline.blockedWorkMin <= 0) {
     rationale.push(
-      `Today's predicted load fits inside the windows you get anyway, so anchoring changes nothing -- just start at ${at(work.startMs)}.`,
+      startOfWorkPassed
+        ? 'The predicted load fits inside the windows you get anyway, so anchoring changes nothing -- just start whenever you like.'
+        : `Today's predicted load fits inside the windows you get anyway, so anchoring changes nothing -- just start at ${at(work.startMs)}.`,
     );
   } else if (!beatsBaseline) {
     rationale.push(
-      `No anchor beats simply starting at ${at(work.startMs)}: ${minutesText(baseline.blockedWorkMin)} come out blocked either way, and pretending otherwise would not help.`,
+      startOfWorkPassed
+        ? 'No anchor still open beats simply starting now: the hours a different start time would have moved are already behind you.'
+        : `No anchor beats simply starting at ${at(work.startMs)}: ${minutesText(baseline.blockedWorkMin)} come out blocked either way, and pretending otherwise would not help.`,
     );
   } else {
     for (const plan of accountPlans.slice(0, 2)) {
@@ -728,13 +840,19 @@ export function planDay(input: PlanInput): SessionPlan {
       usingDefaultSchedule,
     };
   }
-  rationale.push(
-    peakMinutesSaved > 0
-      ? `Predicted blocked peak minutes: ${Math.round(planned.blockedPeakMin)}, down from ${Math.round(baseline.blockedPeakMin)} with no anchoring.`
-      : workMinutesSaved > 0
-        ? `Predicted blocked working minutes: ${Math.round(planned.blockedWorkMin)}, down from ${Math.round(baseline.blockedWorkMin)} with no anchoring.`
-        : `Predicted blocked peak minutes: ${Math.round(planned.blockedPeakMin)}, the same as with no anchoring.`,
-  );
+  // Skipped once the start of work has passed with nothing beating it: the
+  // planned and baseline anchors then describe different parts of the day, so
+  // "the same as with no anchoring" would compare hours the user has lived
+  // through against hours they have not.
+  if (beatsBaseline || !startOfWorkPassed) {
+    rationale.push(
+      peakMinutesSaved > 0
+        ? `Predicted blocked peak minutes: ${Math.round(planned.blockedPeakMin)}, down from ${Math.round(baseline.blockedPeakMin)} with no anchoring.`
+        : workMinutesSaved > 0
+          ? `Predicted blocked working minutes: ${Math.round(planned.blockedWorkMin)}, down from ${Math.round(baseline.blockedWorkMin)} with no anchoring.`
+          : `Predicted blocked peak minutes: ${Math.round(planned.blockedPeakMin)}, the same as with no anchoring.`,
+    );
+  }
   rationale.push(...caveats);
 
   return {

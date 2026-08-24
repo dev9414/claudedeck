@@ -1,0 +1,83 @@
+/*
+ * Toast stack.
+ *
+ * Bottom-trailing corner, because that is the one region no view puts content
+ * in and the one place a message can appear without displacing what you were
+ * reading. Colour comes from the status tokens and is redundant every time: the
+ * glyph and the sentence both already say which kind this is.
+ *
+ * The container is mounted for the life of the app so its live region is ready
+ * before any text lands in it, which is why it must not take pointer events.
+ */
+
+.cd-toasts {
+  position: fixed;
+  /* Above the modal overlay (50): a confirmation that a dialog can hide is not
+     a confirmation. Below the skip link (60) is not an option for the same
+     reason, so this is the app's top layer. */
+  z-index: 70;
+  inset-block-end: var(--space-4);
+  inset-inline-end: var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  width: min(360px, calc(100vw - var(--space-6)));
+  pointer-events: none;
+}
+
+.cd-toast {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow);
+  color: var(--text-secondary);
+  font-size: 13px;
+  pointer-events: auto;
+}
+
+.cd-toast > .cd-icon {
+  flex: none;
+  margin-top: 1px;
+}
+
+.cd-toast[data-tone='good'] {
+  border-color: color-mix(in srgb, var(--status-good) 40%, var(--border));
+}
+
+.cd-toast[data-tone='good'] > .cd-icon {
+  color: var(--status-good-text);
+}
+
+.cd-toast[data-tone='critical'] {
+  border-color: color-mix(in srgb, var(--status-critical) 45%, var(--border));
+  background: color-mix(in srgb, var(--status-critical) 8%, var(--surface-raised));
+}
+
+.cd-toast[data-tone='critical'] > .cd-icon {
+  color: var(--status-critical);
+}
+
+.cd-toast-body {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.cd-toast-title {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  /* The same rise the dialogs use: this arrived on top of what you were
+     reading, and says so once. Nothing loops, and nothing animates out. */
+  .cd-toast {
+    animation: cd-panel-rise var(--dur-base) var(--ease-entrance) both;
+  }
+}

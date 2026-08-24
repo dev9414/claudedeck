@@ -455,3 +455,15 @@
   max-width: 74ch;
   text-wrap: pretty;
 }
+
+/* A label and a short numeric input on one line, for a single scalar setting. */
+.cd-field--inline {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.cd-input--num {
+  width: 6.5rem;
+  font-variant-numeric: tabular-nums;
+}

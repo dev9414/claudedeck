@@ -45,12 +45,24 @@ export function Badge({ tone = 'neutral', icon, children, title, className, id }
   );
 }
 
-/** How each `UsageStatus` presents: tone, glyph, and the words a user reads. */
+/**
+ * How each `UsageStatus` presents: tone, glyph, and the words a user reads.
+ *
+ * These labels describe the *poll*, not the quota: `ok` means usage came back,
+ * and the step above it is already blocked. So none of them may use a word like
+ * "healthy" — the meters own that verdict, and this badge sat green beside a
+ * meter reading 78% until it was renamed to what it measures.
+ */
 export const USAGE_STATUS_META: Record<
   UsageStatus,
   { tone: BadgeTone; icon: IconName; label: string; description: string }
 > = {
-  ok: { tone: 'good', icon: 'check', label: 'Healthy', description: 'Usage reported and within quota.' },
+  ok: {
+    tone: 'good',
+    icon: 'check',
+    label: 'Usage reported',
+    description: 'The last poll read this usage. How much quota is left is what the meters say.',
+  },
   unavailable: {
     tone: 'neutral',
     icon: 'info',

@@ -193,6 +193,11 @@ function eventKey(event: AutoSwitchEvent): string {
   return `${event.ts}|${event.kind}|${event.slot ?? ''}|${event.message}`;
 }
 
+/** The shell routes on the hash, so a view can hand over without prop drilling. */
+function goToAccounts(): void {
+  if (typeof window !== 'undefined') window.location.hash = '#/accounts';
+}
+
 // ---------------------------------------------------------------------------
 // Field primitives
 // ---------------------------------------------------------------------------
@@ -292,6 +297,8 @@ function Console({ state, api }: { state: DeckState; api: DeckApi }) {
 
   const [pending, setPending] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [startError, setStartError] = useState<string | null>(null);
+  const [startBlocked, setStartBlocked] = useState(false);
   const [threshold, setThreshold] = useState(cfg.threshold);
   const [preview, setPreview] = useState<SwitchResult | null>(null);
   const [previewError, setPreviewError] = useState<string | null>(null);
@@ -320,6 +327,9 @@ function Console({ state, api }: { state: DeckState; api: DeckApi }) {
 
   const toggleEngine = useCallback(async () => {
     setPending('engine');
+    setSaveError(null);
+    setStartError(null);
+    setStartBlocked(false);
     try {
       if (running) {
         const stopped = await api.stopAutoSwitch();
@@ -329,14 +339,26 @@ function Console({ state, api }: { state: DeckState; api: DeckApi }) {
         }
         await patchAuto({ enabled: false });
       } else {
-        await patchAuto({ enabled: true });
+        // Start first, persist second. `enabled: true` on disk behind a refused
+        // start is what makes the whole app believe rotation is armed and keep
+        // sending the user back to a button that fails again.
         const started = await api.startAutoSwitch();
-        if (!started.ok) setSaveError(started.error);
+        if (!started.ok) {
+          if (started.code === 'too-few-accounts') {
+            setStartBlocked(true);
+            // Keep the stored setting honest about what is actually running.
+            if (cfg.enabled) await patchAuto({ enabled: false });
+            return;
+          }
+          setStartError(started.error);
+          return;
+        }
+        await patchAuto({ enabled: true });
       }
     } finally {
       setPending(null);
     }
-  }, [api, patchAuto, running]);
+  }, [api, cfg.enabled, patchAuto, running]);
 
   // --- live preview --------------------------------------------------------
 
@@ -428,8 +450,12 @@ function Console({ state, api }: { state: DeckState; api: DeckApi }) {
     ? `Polling every ${cfg.pollIntervalSec}s and moving off the active account at ${cfg.threshold}%, using “${strategyTitle}”.`
     : 'Nothing is polling. Quota only updates when you refresh by hand, and no account will be rotated.';
 
+  // The engine refuses below two accounts (`too-few-accounts`), so the button
+  // that would trigger that refusal is not offered at all.
+  const tooFewToRotate = accounts.length < 2 || startBlocked;
+
   const mismatch =
-    cfg.enabled && !running
+    cfg.enabled && !running && !tooFewToRotate
       ? 'Auto-switch is turned on in settings but the engine is not running in this session. Press Start auto-switch to bring it back up.'
       : !cfg.enabled && running
         ? 'The engine is running even though auto-switch is turned off in settings. Press Stop auto-switch to bring the two back in line.'
@@ -494,12 +520,36 @@ function Console({ state, api }: { state: DeckState; api: DeckApi }) {
               variant={running ? 'secondary' : 'primary'}
               icon="power"
               busy={pending === 'engine'}
+              disabled={!running && tooFewToRotate}
               onClick={() => void toggleEngine()}
             >
               {running ? 'Stop auto-switch' : 'Start auto-switch'}
             </Button>
           </span>
         </div>
+        {tooFewToRotate ? (
+          <Note tone="warning" icon="alert-triangle">
+            <span>
+              Rotation needs two accounts to move between, and ClaudeDeck is managing {accounts.length}.
+              {cfg.enabled ? ' Auto-switch is on in settings, but it cannot start until there is a second one.' : ''}
+            </span>
+            <div className="cd-row">
+              <Button icon="plus" onClick={goToAccounts}>
+                Add an account
+              </Button>
+              {cfg.enabled ? (
+                <Button variant="ghost" onClick={() => void patchAuto({ enabled: false })}>
+                  Turn the setting off
+                </Button>
+              ) : null}
+            </div>
+          </Note>
+        ) : null}
+        {startError ? (
+          <Note tone="critical" icon="alert-octagon">
+            Auto-switch did not start, so it was left off: {startError}
+          </Note>
+        ) : null}
         {mismatch ? (
           <Note tone="warning" icon="alert-triangle">
             {mismatch}
@@ -703,7 +753,9 @@ function Console({ state, api }: { state: DeckState; api: DeckApi }) {
             description={
               running
                 ? `Entries appear on every poll — the first one lands within ${cfg.pollIntervalSec}s.`
-                : 'Start auto-switch and every poll, skip, and switch will be recorded here.'
+                : tooFewToRotate
+                  ? 'The engine needs a second account before it can run, so there is nothing to record yet.'
+                  : 'Start auto-switch and every poll, skip, and switch will be recorded here.'
             }
           />
         ) : (
