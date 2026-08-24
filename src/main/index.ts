@@ -13,6 +13,7 @@ import { createDemoServices, isDemoMode } from './demo';
 import { registerIpc } from './ipc';
 import { createNotifier, type DeckNotifier } from './notifications';
 import { createServices, type AppServices } from './services';
+import { createUsagePoller, type UsagePoller } from './poller';
 import { createTray, type TrayController } from './tray';
 import { createWindowController, type WindowController } from './window';
 
@@ -21,6 +22,7 @@ import { createWindowController, type WindowController } from './window';
 let services: AppServices | null = null;
 let windows: WindowController | null = null;
 let tray: TrayController | null = null;
+let poller: UsagePoller | null = null;
 let notifier: DeckNotifier | null = null;
 let teardownIpc: (() => void) | null = null;
 
@@ -97,6 +99,14 @@ async function bootstrap(): Promise<void> {
 
   // A first refresh gives the tray real numbers instead of a placeholder ring.
   if (!demo) void services.refreshUsage();
+
+  // ...and then keep them current. Without this the boot-time snapshot is all
+  // the dashboard ever shows, because the only other thing that polls is the
+  // auto-switch engine, which is off by default.
+  if (!demo) {
+    poller = createUsagePoller({ services, getWindow: () => windows?.current() ?? null });
+    poller.start();
+  }
 
   const settings = services.currentSettings();
   applyLoginItem(settings.launchAtLogin);
@@ -176,6 +186,10 @@ function applyLoginItem(enabled: boolean): void {
 }
 
 async function shutdown(current: AppServices): Promise<void> {
+  // Stopped before the window is destroyed, so its listeners come off a live
+  // BrowserWindow rather than a destroyed one.
+  poller?.stop();
+  poller = null;
   teardownIpc?.();
   teardownIpc = null;
   tray?.destroy();
