@@ -588,7 +588,10 @@ describe('planDay: edge cases', () => {
     expect(fleetCost([], 3)).toBe(0);
   });
 
-  it('refuses to recommend anything from an all-zero profile', () => {
+  it('says it has no data, not that it found nothing, when nothing was observed', () => {
+    // `emptyProfile()` means no hour was ever watched. Saying "your history
+    // shows no quota being burned" would be a finding drawn from an absence, so
+    // the plan has to name the absence instead.
     const plan = planDay(planInput({ accounts: [acct(1, emptyProfile())] }));
     const planned = only(plan.accounts).outcome;
 
@@ -596,11 +599,24 @@ describe('planDay: edge cases', () => {
     expect(planned.blockedWorkMin).toBe(0);
     expect(planned.windows.every((w) => w.endPct === 0)).toBe(true);
     expect(plan.peakMinutesSaved).toBe(0);
-    expect(only(plan.rationale)).toMatch(/no quota being burned/);
     expect(plan.lowConfidence).toBe(true);
-    expect(plan.rationale.some((line) => /no recorded usage to learn from yet/.test(line))).toBe(
-      true,
+    expect(only(plan.rationale)).toMatch(/no recorded usage to simulate against/);
+    // And it must not quote a minute figure it computed from a placeholder.
+    expect(plan.rationale.some((line) => /\d+ minutes? come out blocked/.test(line))).toBe(false);
+    expect(plan.rationale.some((line) => /blocked peak minutes:/.test(line))).toBe(false);
+  });
+
+  it('distinguishes "watched, and you burned nothing" from "never watched"', () => {
+    // Hours observed, all of them idle: that IS a finding about the day, and it
+    // should read differently from having no history at all.
+    const idle = flat(0, { samples: new Array<number>(24).fill(12), confidence: 0.9 });
+    const plan = planDay(planInput({ accounts: [acct(1, idle)] }));
+
+    expect(only(plan.rationale)).toMatch(/no quota being burned/);
+    expect(plan.rationale.some((line) => /no recorded usage to simulate against/.test(line))).toBe(
+      false,
     );
+    expect(plan.peakMinutesSaved).toBe(0);
   });
 
   it('simulates a working day that crosses midnight', () => {

@@ -110,6 +110,40 @@ export function Accounts() {
     [],
   );
 
+  const [tokenOpen, setTokenOpen] = useState(false);
+  const [tokenValue, setTokenValue] = useState('');
+  const [tokenEmail, setTokenEmail] = useState('');
+
+  /** Capture whoever Claude Code is signed in as. Shared by the header and the
+   *  empty state, so both report success and failure the same way. */
+  const captureSignedIn = useCallback(
+    () =>
+      run('add', async () => {
+        const result = await api.addCurrentAccount();
+        if (!result.ok) return result.error;
+        setAnnouncement(`Captured ${result.value.email} into slot ${result.value.slot}.`);
+        return null;
+      }),
+    [api, run],
+  );
+
+  const submitToken = useCallback(
+    () =>
+      run('add-token', async () => {
+        const token = tokenValue.trim();
+        if (!token) return 'Paste a setup token or API key first.';
+        const email = tokenEmail.trim();
+        const result = await api.addToken({ token, ...(email ? { email } : {}) });
+        if (!result.ok) return result.error;
+        setAnnouncement(`Registered ${result.value.email} into slot ${result.value.slot}.`);
+        setTokenValue('');
+        setTokenEmail('');
+        setTokenOpen(false);
+        return null;
+      }),
+    [api, run, tokenValue, tokenEmail],
+  );
+
   const startSwitch = useCallback(
     (account: Account) =>
       run(`switch:${account.slot}`, async () => {
@@ -258,7 +292,42 @@ export function Accounts() {
             Safe mode — writes blocked
           </Badge>
         ) : null}
+        {/* Always reachable, not just from the empty state. Adding a second
+            account is the whole point of the app, and it used to be impossible
+            to find once the first one existed. */}
+        <Button
+          variant="secondary"
+          icon="plus"
+          busy={pending === 'add-token'}
+          disabled={state.settings.safeMode}
+          onClick={() => setTokenOpen(true)}
+          title="Register a setup token or API key, for a machine you cannot log in on"
+        >
+          Add from token
+        </Button>
+        <Button
+          variant="primary"
+          icon="plus"
+          busy={pending === 'add'}
+          disabled={state.settings.safeMode}
+          onClick={() => void captureSignedIn()}
+          title="Capture whatever Claude Code is signed in as right now"
+        >
+          Add account
+        </Button>
       </header>
+
+      <div className="cd-note cd-note--info">
+        <Icon name="info" />
+        <span className="cd-note-body">
+          <span className="cd-note-title">Adding another account</span>
+          <span>
+            Log in to Claude Code as the next account, then press <strong>Add account</strong> — ClaudeDeck captures
+            whoever is signed in. Do <strong>not</strong> run <code>/logout</code> first: Claude Code may revoke the
+            refresh token for the account you are leaving.
+          </span>
+        </span>
+      </div>
 
       {error ? (
         <div className="cd-note cd-note--error" role="alert">
@@ -290,14 +359,7 @@ export function Accounts() {
               variant="primary"
               icon="plus"
               busy={pending === 'add'}
-              onClick={() =>
-                void run('add', async () => {
-                  const result = await api.addCurrentAccount();
-                  if (!result.ok) return result.error;
-                  setAnnouncement(`Captured ${result.value.email} into slot ${result.value.slot}.`);
-                  return null;
-                })
-              }
+              onClick={() => void captureSignedIn()}
             >
               Capture the signed-in account
             </Button>
@@ -635,6 +697,75 @@ export function Accounts() {
             ) : null}
           </div>
         ) : null}
+      </Modal>
+
+      <Modal
+        open={tokenOpen}
+        onClose={() => setTokenOpen(false)}
+        title="Add an account from a token"
+        description="For a machine you cannot open a browser on. ClaudeDeck detects which kind of token it is; no network call is made to register it."
+        size="md"
+        footer={
+          <>
+            <Button variant="ghost" onClick={() => setTokenOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              variant="primary"
+              icon="plus"
+              busy={pending === 'add-token'}
+              disabled={!tokenValue.trim()}
+              onClick={() => void submitToken()}
+            >
+              Register account
+            </Button>
+          </>
+        }
+      >
+        <div className="cd-stack">
+          <label className="cd-field">
+            <span className="cd-field-label">Token</span>
+            <input
+              type="password"
+              className="cd-input"
+              value={tokenValue}
+              autoComplete="off"
+              spellCheck={false}
+              placeholder="sk-ant-oat01-… or sk-ant-api03-…"
+              onChange={(e) => setTokenValue(e.target.value)}
+            />
+            <span className="cd-field-hint">
+              A setup token from <code>claude setup-token</code>, or a managed API key. Masked because it is a
+              credential; ClaudeDeck never logs or prints it.
+            </span>
+          </label>
+
+          <label className="cd-field">
+            <span className="cd-field-label">Label (optional)</span>
+            <input
+              type="text"
+              className="cd-input"
+              value={tokenEmail}
+              autoComplete="off"
+              placeholder="you@example.com"
+              onChange={(e) => setTokenEmail(e.target.value)}
+            />
+            <span className="cd-field-hint">
+              Only a name for the slot. Leave it blank and ClaudeDeck generates one.
+            </span>
+          </label>
+
+          <div className="cd-note cd-note--info">
+            <Icon name="info" />
+            <span className="cd-note-body">
+              <span className="cd-note-title">API keys have no subscription quota</span>
+              <span>
+                An <code>sk-ant-api…</code> key shows no usage windows, and the usage-aware switch strategies never
+                rotate onto it unless you opt in.
+              </span>
+            </span>
+          </div>
+        </div>
       </Modal>
 
       <div className="cd-live" role="status" aria-live="polite">

@@ -667,8 +667,22 @@ export function planDay(input: PlanInput): SessionPlan {
     0,
   );
 
+  // Whether the profile is a measurement or a placeholder. With no observed
+  // hours, every minute figure below is arithmetic about an invented day, so the
+  // rationale states the situation instead of quoting numbers it cannot stand
+  // behind -- a caveat further down the list does not undo a number already read.
+  const observedHours = accounts.reduce(
+    (most, account) =>
+      Math.max(most, (account.profile?.samples ?? []).filter((count) => count > 0).length),
+    0,
+  );
+
   const rationale: string[] = [];
-  if (totalDemand <= 0) {
+  if (observedHours === 0) {
+    rationale.push(
+      'There is no recorded usage to simulate against yet, so no start time can be recommended over another. ClaudeDeck records your quota every few minutes while it runs; leave it open for a working day and this becomes a real recommendation.',
+    );
+  } else if (totalDemand <= 0) {
     rationale.push(
       'Your history shows no quota being burned on a day like this, so anchoring changes nothing today.',
     );
@@ -698,6 +712,22 @@ export function planDay(input: PlanInput): SessionPlan {
   // the binding constraint, saved *working* minutes are the real result and
   // reporting "no change" would undersell a plan that did help.
   const workMinutesSaved = Math.max(0, round(baseline.blockedWorkMin - planned.blockedWorkMin, 2));
+  if (observedHours === 0) {
+    // Nothing to summarise: the caveats explain why, and inventing a "0 minutes,
+    // the same as with no anchoring" here would read as a measured result.
+    rationale.push(...caveats);
+    return {
+      day,
+      schedule,
+      profile,
+      accounts: accountPlans,
+      baseline,
+      peakMinutesSaved,
+      rationale: rationale.slice(0, 5),
+      lowConfidence: true,
+      usingDefaultSchedule,
+    };
+  }
   rationale.push(
     peakMinutesSaved > 0
       ? `Predicted blocked peak minutes: ${Math.round(planned.blockedPeakMin)}, down from ${Math.round(baseline.blockedPeakMin)} with no anchoring.`

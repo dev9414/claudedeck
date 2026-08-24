@@ -359,6 +359,23 @@ export function createTray(deps: TrayDeps): TrayController {
     });
 
     items.push({ type: 'separator' });
+    // Adding the second account is the step people get stuck on, and the tray is
+    // where they already are when they finish logging in as the next account.
+    items.push({
+      label: 'Add the signed-in account',
+      enabled: !state.settings.safeMode,
+      toolTip: state.settings.safeMode
+        ? 'Safe mode is on, so ClaudeDeck will not write.'
+        : 'Capture whoever Claude Code is signed in as right now',
+      click: () => {
+        void services.addCurrentAccount().then((result) => {
+          // The tray has nowhere to show an error, so surface the window and let
+          // the Accounts view report it rather than failing silently.
+          if (!result.ok) deps.showWindow();
+        });
+      },
+    });
+    items.push({ type: 'separator' });
     items.push({ label: 'Open ClaudeDeck', click: () => deps.showWindow() });
     items.push({ label: 'Quit ClaudeDeck', click: () => deps.quit() });
 

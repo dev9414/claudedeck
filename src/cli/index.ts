@@ -1732,24 +1732,39 @@ async function cmdPlan(services: CliServices, args: ParsedArgs): Promise<number>
     `${plan.schedule.label}   work ${spanText(plan.schedule.work)}   peak ${spanText(plan.schedule.peak)}`,
   ]);
   head.push(['profile', profileText(plan.profile)]);
-  head.push([
-    'blocked',
-    `${formatMins(planned.blockedWorkMin)} of working hours, ${formatMins(planned.blockedPeakMin)} of peak   ` +
-      paint(
-        `(unanchored: ${formatMins(plan.baseline.blockedWorkMin)} / ${formatMins(plan.baseline.blockedPeakMin)})`,
-        'dim',
-      ),
-  ]);
-  if (plan.peakMinutesSaved > 0) {
-    head.push(['saved', paint(`${formatMins(plan.peakMinutesSaved)} of peak time`, 'green')]);
+  // With no observed hours the simulation ran on a placeholder load, so its
+  // blocked-minute totals are arithmetic about a made-up day. Printing "1h
+  // blocked" next to "0 of 24 hours observed" reads as a measurement, and a
+  // caveat three lines later does not undo that -- so the figures are withheld
+  // until there is something behind them.
+  const observedHours = plan.profile.samples.filter((count) => count > 0).length;
+  const measured = observedHours > 0 && plan.profile.confidence > 0;
+
+  if (measured) {
+    head.push([
+      'blocked',
+      `${formatMins(planned.blockedWorkMin)} of working hours, ${formatMins(planned.blockedPeakMin)} of peak   ` +
+        paint(
+          `(unanchored: ${formatMins(plan.baseline.blockedWorkMin)} / ${formatMins(plan.baseline.blockedPeakMin)})`,
+          'dim',
+        ),
+    ]);
+    if (plan.peakMinutesSaved > 0) {
+      head.push(['saved', paint(`${formatMins(plan.peakMinutesSaved)} of peak time`, 'green')]);
+    }
+    const peakWeight = planner?.peakWeight;
+    head.push([
+      'cost',
+      typeof peakWeight === 'number'
+        ? `${planned.cost}   ${paint(`(a blocked peak minute counts ${peakWeight}x)`, 'dim')}`
+        : String(planned.cost),
+    ]);
+  } else {
+    head.push([
+      'blocked',
+      paint('not estimated yet — no usage recorded to simulate against', 'dim'),
+    ]);
   }
-  const peakWeight = planner?.peakWeight;
-  head.push([
-    'cost',
-    typeof peakWeight === 'number'
-      ? `${planned.cost}   ${paint(`(a blocked peak minute counts ${peakWeight}x)`, 'dim')}`
-      : String(planned.cost),
-  ]);
 
   const keyWidth = head.reduce((width, [key]) => Math.max(width, key.length), 0);
   for (const [key, value] of head) out(`${paint(padCell(key, keyWidth, 'left'), 'dim')}  ${value}`);
@@ -1763,7 +1778,9 @@ async function cmdPlan(services: CliServices, args: ParsedArgs): Promise<number>
       { header: 'ANCHOR' },
       { header: 'WHEN' },
       { header: 'RESETS' },
-      { header: 'STALL', align: 'right' },
+      // Simulated, like the blocked totals: omitted rather than invented when
+      // the profile has no observed hours behind it.
+      { header: measured ? 'STALL' : '', align: 'right' },
     ];
     const live = new Map(state.accounts.map((account) => [account.slot, account] as const));
     const rows = plan.accounts.map((account) => [
@@ -1773,7 +1790,7 @@ async function cmdPlan(services: CliServices, args: ParsedArgs): Promise<number>
       formatTimeOfDay(account.outcome.anchorAt),
       paint(formatWhen(account.outcome.anchorAt, now), 'dim'),
       resetsText(account),
-      formatMins(stalledMin(account.outcome.windows)),
+      measured ? formatMins(stalledMin(account.outcome.windows)) : '',
     ]);
     for (const line of renderTable(columns, rows)) out(line);
   }

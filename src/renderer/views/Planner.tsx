@@ -279,6 +279,11 @@ export function Planner() {
   const problems = validateSchedule(schedule);
   const dirty = draft !== null;
 
+  // How many local hours the profile has actually seen. Zero means the plan was
+  // simulated from a placeholder load, and its minute figures are arithmetic
+  // about an invented day rather than a finding about this one.
+  const observedHours = (plan?.profile.samples ?? []).filter((count) => count > 0).length;
+
   const anchorBySlot = new Map((anchors ?? []).map((entry) => [entry.slot, entry]));
   const lanes: WindowPlanLane[] = (plan?.accounts ?? []).map((account) => ({
     slot: account.slot,
@@ -465,7 +470,14 @@ export function Planner() {
                 </Button>
               </div>
 
-              {plan.peakMinutesSaved === 0 ? (
+              {observedHours === 0 ? (
+                <p className="cd-secondary">
+                  There is no recorded usage to simulate against yet, so ClaudeDeck is not putting a
+                  number on this. It records your quota every few minutes while it runs — leave it
+                  open for a working day and this becomes a real recommendation rather than
+                  arithmetic about a placeholder.
+                </p>
+              ) : plan.peakMinutesSaved === 0 ? (
                 <p className="cd-secondary">
                   Anchoring would not help today. On the simulated day, no start time keeps more of
                   your peak hours unblocked than simply beginning work at{' '}

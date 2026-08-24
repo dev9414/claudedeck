@@ -237,6 +237,32 @@ export function App() {
 
     list.push(
       {
+        id: 'account:add',
+        title: 'Add the account Claude Code is signed in as',
+        group: 'Accounts',
+        icon: 'plus',
+        keywords: 'add capture new second another account login',
+        disabled: state?.settings.safeMode === true,
+        run: () => {
+          // The palette does not own the add flow -- it routes to the view that
+          // does, so there is one place that reports success and failure.
+          navigate('accounts');
+          setAnnouncement('Opened Accounts. Press "Add account" to capture the signed-in account.');
+        },
+      },
+      {
+        id: 'account:add-token',
+        title: 'Add an account from a setup token or API key',
+        group: 'Accounts',
+        icon: 'plus',
+        keywords: 'token api key headless setup-token sk-ant',
+        disabled: state?.settings.safeMode === true,
+        run: () => {
+          navigate('accounts');
+          setAnnouncement('Opened Accounts. Use "Add from token" to register a token.');
+        },
+      },
+      {
         id: 'switch:next',
         title: 'Rotate to the next account',
         group: 'Switch account',
