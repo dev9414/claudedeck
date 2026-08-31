@@ -41,7 +41,7 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: Check out
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Refuse a tag that disagrees with package.json
         shell: bash
@@ -91,16 +91,16 @@ jobs:
 
     steps:
       - name: Check out
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: "22"
           cache: npm
 
       - name: Cache the Electron and electron-builder downloads
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cache/electron
@@ -136,7 +136,7 @@ jobs:
         run: npx --no-install electron-builder --${{ matrix.platform }} --publish ${{ github.event_name == 'push' && 'always' || 'never' }}
 
       - name: Attach the installers to the workflow run
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: claudedeck-${{ matrix.platform }}
           if-no-files-found: error
